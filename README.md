@@ -116,21 +116,64 @@ Lista todos os inversores conhecidos e canais DC sem consumir nada da API:
 solar inverters
 ```
 
-### 4. Consultar Saldo da Cota
-Exibe a auditoria do *Budget Keeper*:
+### 5. Sincronizar Telemetria
+Sincroniza os dados do dia corrente e salva no banco local:
 ```bash
-solar budget
+solar sync
 ```
+
+### 6. Executar Coletor em Background (Daemon)
+Mantém a coleta automática a cada 30 min com fechamento noturno às 20h:
+```bash
+solar daemon
+```
+
+### 7. Consultar Histórico Local Offline
+Exibe a tabela diária diretamente do SQLite (zero chamadas de API):
+```bash
+solar history
+```
+
+### 8. Iniciar o Dashboard Web Local
+Inicia o servidor web leve e responsivo (porta padrão 8000):
+```bash
+solar web
+```
+
+---
+
+## 🌐 Dashboard Web Local (100% Offline & Self-Hosted)
+
+O **SolarHub** inclui um Dashboard Web moderno, leve e totalmente self-hosted:
+* **Zero CDNs ou Fontes Externas:** Chart.js embutido localmente, garantindo total privacidade e velocidade instantânea.
+* **Hero Cards:** Geração do dia (kWh), economia financeira estimada na moeda local, potência instalada e saldo da cota mensal.
+* **🏆 Hall of Fame:** Painel que destaca o recorde histórico de melhor dia de geração de todos os tempos.
+* **Gráfico Interativo:** Curva diária de geração navegável e responsiva (desktop e celular).
+* **Grid de Microinversores:** Mapeamento visual de cada inversor físico e seus canais DC.
+
+Para iniciar, basta rodar:
+```bash
+solar web
+```
+E acessar `http://localhost:8000` no seu navegador.
 
 ---
 
 ## 🧪 Testes Automatizados
 
-O projeto conta com suíte de testes unitários para a assinatura criptográfica, mapeamento de topologias e lógica de cota:
+O projeto conta com suíte de testes unitários para a assinatura criptográfica, mapeamento de topologias, lógica de cota e rotas da API Web:
 
 ```bash
 pytest
 ```
+
+---
+
+## 🙏 Agradecimentos & Inspiração de Produto
+
+A arquitetura analítica offline-first, a experiência de usuário do Dashboard e conceitos visuais como o **Hall of Fame** (recordes históricos da usina) e agregação diária no SQLite foram diretamente inspirados pelo excelente projeto open source [ez1-monitor](https://github.com/TehcSimon/ez1-monitor) desenvolvido por **Simon (TehcSimon)**, disponibilizado sob a licença MIT. 
+
+Estendemos nossos sinceros créditos e agradecimentos à comunidade e ao autor pelo modelo de qualidade e simplicidade que serviu de referência para a expansão do monitoramento de usinas residenciais com ECU e microinversores multicanais (DS3, QS1, QT2 e YC1000).
 
 ---
 
@@ -139,7 +182,7 @@ pytest
 Contribuições são muito bem-vindas!
 1. Faça um Fork do projeto
 2. Crie sua branch de funcionalidade (`git checkout -b feature/nova-integracao`)
-3. Faça o commit das alterações (`git commit -m 'feat: adiciona publicador MQTT'`)
+3. Faça o commit das alterações (`git commit -m 'feat: adiciona nova funcionalidade'`)
 4. Suba para o GitHub (`git push origin feature/nova-integracao`)
 5. Abra um Pull Request
 
@@ -148,3 +191,4 @@ Contribuições são muito bem-vindas!
 ## 📄 Licença
 
 Distribuído sob a licença **MIT**. Veja [LICENSE](LICENSE) para mais detalhes.
+

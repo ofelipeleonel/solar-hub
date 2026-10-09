@@ -284,6 +284,29 @@ def history(
         session.close()
 
 
+@app.command()
+def web(
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Endereço de escuta do servidor web."),
+    port: int = typer.Option(8000, "--port", "-p", help="Porta TCP do servidor web."),
+):
+    """
+    Inicia o Dashboard Web Local embutido (100% offline e self-hosted).
+    """
+    import uvicorn
+    console.print(Panel(
+        f"[bold green]SolarHub Web Dashboard Ativo![/bold green]\n"
+        f"Acesse no navegador: [bold cyan]http://{host}:{port}[/bold cyan]\n"
+        f"• Persistência em SQLite (Zero requisições de cota para abrir telas)\n"
+        f"• Chart.js local e offline (Zero rastreamento externo)\n"
+        f"• Hall of Fame e UX inspirados no projeto open source [yellow]ez1-monitor[/yellow]\n"
+        f"Pressione [bold red]Ctrl+C[/bold red] para encerrar.",
+        title="Dashboard Web Local",
+        border_style="green",
+    ))
+    uvicorn.run("solar_hub.interfaces.web.app:app", host=host, port=port, log_level="warning")
+
+
 if __name__ == "__main__":
     app()
+
 

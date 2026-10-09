@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SolarHub | Monitoramento Solar APsystems</title>
+  <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div class="brand">
+        <span class="brand-icon">☀️</span>
+        <div>
+          <h1 class="brand-title">SolarHub</h1>
+          <div class="brand-subtitle" id="system-name">Carregando usina...</div>
+        </div>
+      </div>
+      <div>
+        <div class="status-badge" id="status-badge">
+          <span class="status-dot"></span> Verificando...
+        </div>
+      </div>
+    </header>
+
+    <!-- Hero Cards Grid -->
+    <div class="grid-cards">
+      <!-- Geração de Hoje -->
+      <div class="card">
+        <div class="card-label">Geração de Hoje</div>
+        <div class="card-value" id="val-today-kwh">-- kWh</div>
+        <div class="card-subtext">Produção solar acumulada no dia</div>
+      </div>
+
+      <!-- Economia de Hoje -->
+      <div class="card">
+        <div class="card-label">Economia Estimada</div>
+        <div class="card-value" style="color: var(--accent-green);" id="val-today-money">R$ --</div>
+        <div class="card-subtext">Valor equivalente na tarifa de energia</div>
+      </div>
+
+      <!-- Potência Instalada -->
+      <div class="card">
+        <div class="card-label">Potência da Usina</div>
+        <div class="card-value" style="color: var(--accent-blue);" id="val-capacity">-- kWp</div>
+        <div class="card-subtext">Capacidade nominal homologada</div>
+      </div>
+
+      <!-- Hall of Fame (Inspirado no ez1-monitor) -->
+      <div class="card card-fame">
+        <div class="card-label">🏆 Hall of Fame (Recorde)</div>
+        <div class="card-value" style="color: var(--accent-solar);" id="val-fame-kwh">-- kWh</div>
+        <div class="card-subtext" id="sub-fame-date">Melhor dia de todos os tempos</div>
+      </div>
+
+      <!-- Saldo da Cota da API -->
+      <div class="card">
+        <div class="card-label">Cota OpenAPI (Restante)</div>
+        <div class="card-value" id="val-budget-remaining">-- / 1000</div>
+        <div class="card-subtext" id="sub-budget">Consultas do mês atual</div>
+      </div>
+    </div>
+
+    <!-- Gráfico Histórico Diário -->
+    <div class="section-panel">
+      <div class="section-header">
+        <h2 class="section-title">Histórico Diário de Geração</h2>
+        <span style="font-size:13px; color: var(--text-muted);">Últimos 30 dias (Dados em SQLite local)</span>
+      </div>
+      <div class="chart-container">
+        <canvas id="historyChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Topologia de Microinversores -->
+    <div class="section-panel">
+      <div class="section-header">
+        <h2 class="section-title">Microinversores e Módulos Monitorados</h2>
+        <span style="font-size:13px; color: var(--text-muted);">Mapeamento autônomo via OpenAPI</span>
+      </div>
+      <div class="inverters-grid" id="inverters-grid">
+        <!-- Renderizado dinamicamente pelo JavaScript -->
+      </div>
+    </div>
+
+    <!-- Rodapé e Créditos de Inspiração -->
+    <footer>
+      <div><strong>SolarHub</strong> • Plataforma Open Source para usinas fotovoltaicas APsystems</div>
+      <div class="credits-box">
+        Interface e conceitos analíticos (Hall of Fame, agregados locais e operação offline-first) inspirados pelo projeto 
+        <a href="https://github.com/TehcSimon/ez1-monitor" target="_blank" rel="noopener noreferrer">ez1-monitor</a> 
+        por <strong>Simon (TehcSimon)</strong>, distribuído sob a licença MIT.
+      </div>
+    </footer>
+  </div>
+
+  <!-- Scripts Locais Self-Hosted (Zero chamadas externas) -->
+  <script src="/static/js/chart.umd.min.js"></script>
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
