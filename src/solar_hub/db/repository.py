@@ -191,3 +191,16 @@ class SolarRepository:
 
         self.session.commit()
         return record
+
+    def get_daily_aggregates(
+        self, system_sid: str, limit: int = 30
+    ) -> List[DailyAggregateRecord]:
+        """Retorna o histórico de agregados diários ordenados do mais recente para o mais antigo."""
+        stmt = (
+            select(DailyAggregateRecord)
+            .where(DailyAggregateRecord.system_sid == system_sid)
+            .order_by(DailyAggregateRecord.date.desc())
+            .limit(limit)
+        )
+        return list(self.session.execute(stmt).scalars().all())
+

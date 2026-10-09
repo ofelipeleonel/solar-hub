@@ -82,7 +82,7 @@ class BudgetKeeperService:
             reason=reason,
         )
 
-    def assert_can_request(self, force: bool = False) -> None:
+    def verify_can_request(self, force: bool = False) -> None:
         """
         Lança uma exceção se a requisição violar a política de cota,
         a menos que 'force=True' seja explicitamente passado pelo operador.
@@ -94,3 +94,4 @@ class BudgetKeeperService:
                 calls_made_today=status.calls_today,
                 budget_limit=status.daily_budget_target,
             )
+
