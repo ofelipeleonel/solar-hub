@@ -1,5 +1,4 @@
-import pytest
-from solar_hub.client.auth import generate_signature, build_auth_headers
+from solar_hub.client.auth import build_auth_headers, generate_signature
 
 
 def test_generate_signature_deterministic():
@@ -9,7 +8,7 @@ def test_generate_signature_deterministic():
     request_path = "AZ12649A3DFF"
     timestamp = "1690000000000"
     nonce = "5e36eab8295911ee90751eff13c2920b"
-    
+
     sig, ts, nc = generate_signature(
         app_id=app_id,
         app_secret=app_secret,
@@ -19,7 +18,7 @@ def test_generate_signature_deterministic():
         nonce=nonce,
         signature_method="HmacSHA256"
     )
-    
+
     assert ts == timestamp
     assert nc == nonce
     assert isinstance(sig, str)
@@ -32,19 +31,19 @@ def test_request_path_last_segment_extraction():
     app_secret = "app_secret"
     ts = "1000"
     nc = "nonce"
-    
+
     # Path completo vs apenas o último segmento devem gerar exatamente a mesma assinatura
     sig_full, _, _ = generate_signature(
         app_id=app_id,
         app_secret=app_secret,
-        request_path="/user/api/v2/systems/details/E20E084572070216",
+        request_path="/user/api/v2/systems/details/DEMO123456789012",
         timestamp=ts,
         nonce=nc
     )
     sig_short, _, _ = generate_signature(
         app_id=app_id,
         app_secret=app_secret,
-        request_path="E20E084572070216",
+        request_path="DEMO123456789012",
         timestamp=ts,
         nonce=nc
     )
@@ -58,7 +57,7 @@ def test_build_auth_headers():
         app_secret="my_secret",
         request_path="my_sid"
     )
-    
+
     required_keys = [
         "X-CA-AppId",
         "X-CA-Timestamp",

@@ -1,8 +1,6 @@
 from datetime import datetime
 from unittest.mock import MagicMock
-import pytest
 
-from solar_hub.core.exceptions import BudgetKeeperBlockError
 from solar_hub.services.budget import BudgetKeeperService
 
 

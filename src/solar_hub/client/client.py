@@ -1,11 +1,14 @@
 import logging
 from typing import Any, Dict, List, Optional
+
 import httpx
 
 from solar_hub.client.auth import build_auth_headers
 from solar_hub.client.models import (
-    APsystemsBaseResponse,
+    EcuBatchEnergy,
     EcuInverters,
+    InverterChannelSummary,
+    InverterTelemetry,
     SystemDetails,
     SystemSummary,
 )
@@ -116,14 +119,50 @@ class APsystemsClient:
         raw_data = self._request(path)
         return SystemSummary(**raw_data)
 
-    def get_inverter_batch_energy(self, sid: str, eid: str, date: Optional[str] = None) -> Dict[str, Any]:
+    def get_inverter_summary(self, sid: str, uid: str) -> InverterChannelSummary:
         """
-        Obtém a telemetria consolidada em lote de todos os microinversores de uma ECU para um dia.
+        Obtém o resumo de energia por canal DC de um microinversor específico.
+        Endpoint: GET /user/api/v2/systems/{sid}/devices/inverter/summary/{uid}
+        """
+        path = f"/user/api/v2/systems/{sid}/devices/inverter/summary/{uid}"
+        raw_data = self._request(path)
+        return InverterChannelSummary(**(raw_data or {}))
+
+    def get_inverter_telemetry(
+        self,
+        sid: str,
+        uid: str,
+        energy_level: str = "minutely",
+        date_range: Optional[str] = None,
+    ) -> InverterTelemetry:
+        """
+        Obtém telemetria elétrica fina (potência DC/AC, tensão, corrente, temperatura, frequência).
+        Endpoint: GET /user/api/v2/systems/{sid}/devices/inverter/energy/{uid}
+        """
+        path = f"/user/api/v2/systems/{sid}/devices/inverter/energy/{uid}"
+        params: Dict[str, Any] = {"energy_level": energy_level}
+        if date_range:
+            params["date_range"] = date_range
+        raw_data = self._request(path, params=params)
+        return InverterTelemetry(**(raw_data or {}))
+
+    def get_inverter_batch_energy(
+        self,
+        sid: str,
+        eid: str,
+        date_range: Optional[str] = None,
+        energy_level: str = "energy",
+    ) -> EcuBatchEnergy:
+        """
+        Obtém telemetria em lote de TODOS os microinversores de uma ECU com apenas 1 requisição.
         Endpoint: GET /user/api/v2/systems/{sid}/devices/inverter/batch/energy/{eid}
         """
         path = f"/user/api/v2/systems/{sid}/devices/inverter/batch/energy/{eid}"
-        params = {"date": date} if date else None
-        return self._request(path, params=params)
+        params: Dict[str, Any] = {"energy_level": energy_level}
+        if date_range:
+            params["date_range"] = date_range
+        raw_data = self._request(path, params=params)
+        return EcuBatchEnergy(**(raw_data or {}))
 
     def get_system_energy(self, sid: str, energy_level: str, date_range: Optional[str] = None) -> Dict[str, Any]:
         """

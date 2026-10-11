@@ -51,7 +51,7 @@ class HardwareDiscoveryService:
             notes="Auto-Discovery: Detalhes da Usina"
         )
 
-        system = self.repository.upsert_system(
+        self.repository.upsert_system(
             sid=details.sid,
             capacity_kwp=details.capacity_kwp,
             system_type=details.type,
@@ -59,6 +59,7 @@ class HardwareDiscoveryService:
             create_date=details.create_date,
             status_light=details.light,
         )
+
 
         # 2. Consulta lista de ECUs e microinversores
         ecu_list = self.client.get_system_inverters(sid)

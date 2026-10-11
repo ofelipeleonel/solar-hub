@@ -1,5 +1,5 @@
-from datetime import datetime, date
 from unittest.mock import MagicMock
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -33,14 +33,12 @@ def test_collector_sync_current_success():
         repository=repo,
         budget=mock_budget,
         sid="TEST_SYS_001",
-        tariff_rate=1.00,  # R$ 1.00 por kWh para teste
     )
 
     result = service.sync_current(force=False)
 
     assert result.success is True
     assert result.energy_today_kwh == 18.50
-    assert result.money_saved == 18.50
     assert result.is_finalized is False
 
     # Valida persistência no repositório
@@ -73,7 +71,6 @@ def test_collector_consolidate_nightly():
         repository=repo,
         budget=mock_budget,
         sid="TEST_SYS_001",
-        tariff_rate=0.90,
     )
 
     result = service.consolidate_nightly(force=True)

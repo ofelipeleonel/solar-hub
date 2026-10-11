@@ -1,0 +1,20 @@
+services:
+  solar-hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: solar-hub:latest
+    container_name: solar-hub
+    restart: unless-stopped
+    ports:
+      # Vincula estritamente a 127.0.0.1 (evita bypass do firewall UFW no Linux e exposição na VPS)
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Persistência do banco de dados local SQLite
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      # Inicia o servidor Web e o coletor em background no mesmo container
+      - ENABLE_DAEMON=true
+      - DATABASE_URL=sqlite:///data/solar_hub.db

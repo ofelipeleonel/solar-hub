@@ -8,7 +8,7 @@
 </head>
 <body>
   <div class="container">
-    <!-- Header -->
+    <!-- Header com Ações Rápidas -->
     <header>
       <div class="brand">
         <span class="brand-icon">☀️</span>
@@ -17,10 +17,20 @@
           <div class="brand-subtitle" id="system-name">Carregando usina...</div>
         </div>
       </div>
-      <div>
+      
+      <div class="header-actions">
         <div class="status-badge" id="status-badge">
           <span class="status-dot"></span> Verificando...
         </div>
+        <button id="btn-sync" class="btn btn-secondary" title="Sincronizar dados recentes com a usina">
+          <span class="btn-icon">⚡</span> <span class="btn-text">Sincronizar</span>
+        </button>
+        <button id="btn-open-export" class="btn btn-secondary" title="Exportar dados locais em CSV ou JSON">
+          <span class="btn-icon">📥</span> Exportar
+        </button>
+        <button id="btn-open-settings" class="btn btn-primary" title="Configurar Telegram, Webhooks e MQTT">
+          <span class="btn-icon">⚙️</span> Integrações
+        </button>
       </div>
     </header>
 
@@ -33,11 +43,11 @@
         <div class="card-subtext">Produção solar acumulada no dia</div>
       </div>
 
-      <!-- Economia de Hoje -->
+      <!-- Microinversores Monitorados -->
       <div class="card">
-        <div class="card-label">Economia Estimada</div>
-        <div class="card-value" style="color: var(--accent-green);" id="val-today-money">R$ --</div>
-        <div class="card-subtext">Valor equivalente na tarifa de energia</div>
+        <div class="card-label">Microinversores</div>
+        <div class="card-value" style="color: var(--accent-green);" id="val-inverters">--</div>
+        <div class="card-subtext" id="sub-inverters">Unidades ativas na usina</div>
       </div>
 
       <!-- Potência Instalada -->
@@ -76,11 +86,40 @@
     <!-- Topologia de Microinversores -->
     <div class="section-panel">
       <div class="section-header">
-        <h2 class="section-title">Microinversores e Módulos Monitorados</h2>
+        <h2 class="section-title">Microinversores Monitorados</h2>
         <span style="font-size:13px; color: var(--text-muted);">Mapeamento autônomo via OpenAPI</span>
       </div>
       <div class="inverters-grid" id="inverters-grid">
         <!-- Renderizado dinamicamente pelo JavaScript -->
+      </div>
+    </div>
+
+    <!-- Diagnóstico de Saúde & Telemetria Multicanal -->
+    <div class="section-panel">
+      <div class="section-header">
+        <h2 class="section-title">Diagnóstico de Saúde & Telemetria Multicanal</h2>
+        <span id="diagnostic-badge" style="font-size:13px; font-weight: 600; padding: 4px 10px; border-radius: 6px; background: rgba(34,197,94,0.15); color: #22c55e;">
+          Saúde: 100% (Normal)
+        </span>
+      </div>
+      <div id="diagnostic-recommendations" style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
+        Avaliando equilíbrio elétrico dos canais...
+      </div>
+      <div class="channels-grid" id="channels-grid">
+        <!-- Renderizado dinamicamente pelo JavaScript -->
+      </div>
+    </div>
+
+    <!-- Alertas Recentes & Registro de Eventos -->
+    <div class="section-panel">
+      <div class="section-header">
+        <h2 class="section-title">Histórico de Alertas & Notificações</h2>
+        <span style="font-size:13px; color: var(--text-muted);">Disparos para Telegram e Webhook</span>
+      </div>
+      <div id="alerts-container">
+        <div id="alerts-list" class="alerts-list">
+          <div style="color: var(--text-muted); font-size: 13px;">Carregando histórico de alertas...</div>
+        </div>
       </div>
     </div>
 
@@ -94,6 +133,166 @@
       </div>
     </footer>
   </div>
+
+  <!-- Modal: Configurações & Integrações -->
+  <dialog id="modal-settings" class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title">⚙️ Configurações & Integrações</h2>
+        <button type="button" class="btn-close" onclick="closeModal('modal-settings')" aria-label="Fechar">✕</button>
+      </div>
+
+      <form id="settings-form" class="modal-body" onsubmit="event.preventDefault(); saveSettings();">
+        <!-- Guia / Descrição -->
+        <p class="modal-intro">
+          As configurações são gravadas diretamente no banco de dados local SQLite e sobrepõem as variáveis de ambiente sem necessidade de reiniciar o container.
+        </p>
+
+        <!-- Telegram Bot -->
+        <fieldset class="config-fieldset">
+          <legend class="config-legend">🤖 Bot do Telegram</legend>
+          <div class="form-group">
+            <label for="cfg-telegram-token" class="form-label">Bot Token (BotFather)</label>
+            <input type="password" id="cfg-telegram-token" class="form-input" placeholder="Ex: 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ" autocomplete="off">
+            <span class="form-hint">Obtenha com o <a href="https://t.me/BotFather" target="_blank" rel="noreferrer">@BotFather</a> no Telegram. Deixe em branco para manter o configurado.</span>
+          </div>
+          <div class="form-group">
+            <label for="cfg-telegram-chat" class="form-label">Chat ID ou Canal</label>
+            <input type="text" id="cfg-telegram-chat" class="form-input" placeholder="Ex: 987654321 ou -1001234567890">
+            <span class="form-hint">Seu ID de usuário ou canal. Obtenha com o <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer">@userinfobot</a>.</span>
+          </div>
+        </fieldset>
+
+        <!-- Webhook Discord / Slack -->
+        <fieldset class="config-fieldset">
+          <legend class="config-legend">🔗 Webhook (Discord / Slack)</legend>
+          <div class="form-group">
+            <label for="cfg-webhook-url" class="form-label">Webhook URL</label>
+            <input type="url" id="cfg-webhook-url" class="form-input" placeholder="https://discord.com/api/webhooks/...">
+            <span class="form-hint">Receba notificações de resumo diário e diagnósticos críticos no seu servidor Discord ou Slack.</span>
+          </div>
+        </fieldset>
+
+        <!-- Parâmetros de Diagnóstico & Alertas -->
+        <fieldset class="config-fieldset">
+          <legend class="config-legend">🔔 Regras de Alerta</legend>
+          <div class="form-grid-2">
+            <div class="form-group">
+              <label for="cfg-cooldown" class="form-label">Cooldown entre Alertas (horas)</label>
+              <input type="number" id="cfg-cooldown" class="form-input" min="1" max="72" value="4">
+              <span class="form-hint">Evita disparos repetidos para a mesma anomalia.</span>
+            </div>
+            <div class="form-group">
+              <label for="cfg-min-health" class="form-label">Saúde Mínima para Alerta (%)</label>
+              <input type="number" id="cfg-min-health" class="form-input" min="10" max="99" value="80">
+              <span class="form-hint">Dispara notificação quando o Score ficar abaixo deste valor.</span>
+            </div>
+          </div>
+        </fieldset>
+
+        <!-- Home Assistant / MQTT -->
+        <fieldset class="config-fieldset">
+          <legend class="config-legend">📡 Integração Home Assistant (MQTT)</legend>
+          <div class="form-group">
+            <label class="form-checkbox-label">
+              <input type="checkbox" id="cfg-mqtt-enabled">
+              <span>Habilitar publicação MQTT (Descoberta automática Home Assistant)</span>
+            </label>
+          </div>
+          <div class="form-grid-2">
+            <div class="form-group">
+              <label for="cfg-mqtt-broker" class="form-label">Broker Host / IP</label>
+              <input type="text" id="cfg-mqtt-broker" class="form-input" placeholder="Ex: 192.168.1.100 ou localhost">
+            </div>
+            <div class="form-group">
+              <label for="cfg-mqtt-port" class="form-label">Porta MQTT</label>
+              <input type="number" id="cfg-mqtt-port" class="form-input" value="1883">
+            </div>
+          </div>
+          <div class="form-grid-2">
+            <div class="form-group">
+              <label for="cfg-mqtt-user" class="form-label">Usuário MQTT (opcional)</label>
+              <input type="text" id="cfg-mqtt-user" class="form-input" placeholder="Deixe em branco se não houver">
+            </div>
+            <div class="form-group">
+              <label for="cfg-mqtt-pass" class="form-label">Senha MQTT (opcional)</label>
+              <input type="password" id="cfg-mqtt-pass" class="form-input" placeholder="Deixe em branco para não alterar">
+            </div>
+          </div>
+        </fieldset>
+
+        <!-- Ações do Modal -->
+        <div class="modal-footer">
+          <div class="modal-footer-left">
+            <button type="button" id="btn-test-alert" class="btn btn-warning" onclick="testNotification()">
+              🧪 Testar Notificação Agora
+            </button>
+            <button type="button" id="btn-mqtt-publish" class="btn btn-secondary" onclick="publishMqtt()">
+              📡 Publicar MQTT Agora
+            </button>
+          </div>
+          <div class="modal-footer-right">
+            <button type="button" class="btn btn-ghost" onclick="closeModal('modal-settings')">Cancelar</button>
+            <button type="submit" id="btn-save-settings" class="btn btn-primary">💾 Salvar Configurações</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- Modal: Exportação de Dados -->
+  <dialog id="modal-export" class="modal-dialog modal-small">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title">📥 Exportar Dados da Usina</h2>
+        <button type="button" class="btn-close" onclick="closeModal('modal-export')" aria-label="Fechar">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <p class="modal-intro">
+          Downloads diretos da base SQLite local. Zero requisições à API da APsystems (preserva 100% da sua cota mensal).
+        </p>
+
+        <div id="export-summary-box" class="export-summary-card">
+          <div class="export-stat">
+            <span class="export-stat-val" id="exp-total-days">--</span>
+            <span class="export-stat-label">Dias Gravados</span>
+          </div>
+          <div class="export-stat">
+            <span class="export-stat-val" id="exp-total-kwh">-- kWh</span>
+            <span class="export-stat-label">Energia Total Acumulada</span>
+          </div>
+        </div>
+
+        <div class="export-grid">
+          <div class="export-action-card">
+            <div class="export-action-title">📊 Histórico Diário de Geração</div>
+            <div class="export-action-desc">Série histórica consolidada dia a dia em kWh.</div>
+            <div class="export-btn-group">
+              <a href="/api/export/generation?format=csv" download class="btn btn-sm btn-secondary">Baixar CSV</a>
+              <a href="/api/export/generation?format=json" download class="btn btn-sm btn-secondary">Baixar JSON</a>
+            </div>
+          </div>
+
+          <div class="export-action-card">
+            <div class="export-action-title">⚡ Telemetria de Canais DC</div>
+            <div class="export-action-desc">Tensão, corrente, potência e temperatura por canal/painel.</div>
+            <div class="export-btn-group">
+              <a href="/api/export/channels?format=csv" download class="btn btn-sm btn-secondary">Baixar CSV</a>
+              <a href="/api/export/channels?format=json" download class="btn btn-sm btn-secondary">Baixar JSON</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer" style="margin-top: 20px;">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('modal-export')">Fechar</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Container de Toasts de Notificação Flutuante -->
+  <div id="toast-container" class="toast-container"></div>
 
   <!-- Scripts Locais Self-Hosted (Zero chamadas externas) -->
   <script src="/static/js/chart.umd.min.js"></script>

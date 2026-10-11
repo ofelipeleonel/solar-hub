@@ -1,5 +1,5 @@
-from datetime import datetime
 from typing import Optional
+
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -12,6 +12,7 @@ from solar_hub.db.repository import SolarRepository
 from solar_hub.services.budget import BudgetKeeperService
 from solar_hub.services.collector import CollectorService
 from solar_hub.services.discovery import HardwareDiscoveryService
+from solar_hub.services.notification import NotificationService
 
 app = typer.Typer(
     name="solar",
@@ -40,16 +41,46 @@ def get_services():
         window_start=settings.solar_window_start,
         window_end=settings.solar_window_end,
     )
+    notifier = NotificationService(
+        repository=repo,
+        system_sid=settings.apsystems_system_id,
+        webhook_url=settings.alert_webhook_url,
+        telegram_bot_token=settings.alert_telegram_bot_token,
+        telegram_chat_id=settings.alert_telegram_chat_id,
+        cooldown_hours=settings.alert_cooldown_hours,
+        min_health_score=settings.alert_min_health_score,
+        quota_warning_pct=settings.alert_quota_warning_pct,
+        midday_check_enabled=settings.alert_midday_check,
+        allow_private_webhooks=settings.allow_private_webhooks,
+    )
+    mqtt_service = None
+    if settings.mqtt_enabled:
+        from solar_hub.services.mqtt import HomeAssistantMqttService
+
+        mqtt_service = HomeAssistantMqttService(
+            repository=repo,
+            budget=budget,
+            system_sid=settings.apsystems_system_id,
+            broker=settings.mqtt_broker,
+            port=settings.mqtt_port,
+            username=settings.mqtt_username,
+            password=settings.mqtt_password,
+            discovery_prefix=settings.mqtt_discovery_prefix,
+            topic_prefix=settings.mqtt_topic_prefix,
+        )
     discovery = HardwareDiscoveryService(client=client, repository=repo)
     collector = CollectorService(
         client=client,
         repository=repo,
         budget=budget,
         sid=settings.apsystems_system_id,
-        tariff_rate=settings.tariff_kwh_rate,
         nightly_time=settings.nightly_sync_time,
+        notifier=notifier,
+        mqtt_service=mqtt_service,
     )
     return settings, session, repo, client, budget, discovery, collector
+
+
 
 
 @app.command()
@@ -93,6 +124,7 @@ def status():
     try:
         # Consulta do banco local
         system = repo.get_system(settings.apsystems_system_id)
+        system_title = system.name if system and system.name else f"Usina {settings.apsystems_system_id}"
         budget_status = budget.get_status()
 
         # Resumo consolidado da API
@@ -112,8 +144,7 @@ def status():
             f"[bold cyan]Hoje:[/bold cyan] {summary.today_kwh:.2f} kWh\n"
             f"[bold cyan]Mês:[/bold cyan] {summary.month_kwh:.2f} kWh\n"
             f"[bold cyan]Ano:[/bold cyan] {summary.year_kwh:.2f} kWh\n"
-            f"[bold green]Lifetime:[/bold green] {summary.lifetime_kwh:,.2f} kWh\n"
-            f"[bold yellow]Economia Estimada:[/bold yellow] {settings.currency_symbol} {summary.lifetime_kwh * settings.tariff_kwh_rate:,.2f}",
+            f"[bold green]Lifetime:[/bold green] {summary.lifetime_kwh:,.2f} kWh",
             title="Telemetria de Geração",
             border_style="green",
         )
@@ -130,7 +161,8 @@ def status():
         )
 
         grid.add_row(energy_panel, budget_panel)
-        console.print(Panel(grid, title=f"Painel SolarHub - Usina {settings.apsystems_system_id}", border_style="cyan"))
+        console.print(Panel(grid, title=f"Painel SolarHub - {system_title}", border_style="cyan"))
+
     finally:
         session.close()
 
@@ -210,7 +242,6 @@ def sync(
             f"[bold green]{res.message}[/bold green]\n"
             f"Data: {res.target_date}\n"
             f"Geração Hoje: [bold]{res.energy_today_kwh:.2f} kWh[/bold]\n"
-            f"Economia Estimada: [bold yellow]{settings.currency_symbol} {res.money_saved:.2f}[/bold yellow]\n"
             f"Geração Lifetime: {res.lifetime_kwh:,.2f} kWh",
             title="Resultado da Sincronização",
             border_style="green",
@@ -254,7 +285,7 @@ def history(
     limit: int = typer.Option(15, "--limit", "-l", help="Quantidade de dias históricos a exibir.")
 ):
     """
-    Exibe o histórico de geração diária e economia do banco SQLite local (Zero cota consumida).
+    Exibe o histórico de geração diária do banco SQLite local (Zero cota consumida).
     """
     settings, session, repo, client, budget, discovery, collector = get_services()
     try:
@@ -266,16 +297,13 @@ def history(
         table = Table(title=f"Histórico Local de Geração (Últimos {len(records)} dias)", show_header=True)
         table.add_column("Data", style="cyan")
         table.add_column("Energia Gerada", justify="right", style="green")
-        table.add_column("Economia Estimada", justify="right", style="yellow")
         table.add_column("Status", justify="center")
 
         for r in records:
             status_badge = "[bold green]Definitivo[/bold green]" if r.is_finalized else "[italic cyan]Parcial[/italic cyan]"
-            money_str = f"{settings.currency_symbol} {r.money_saved:.2f}" if r.money_saved is not None else "-"
             table.add_row(
                 r.date,
                 f"{r.energy_kwh:.2f} kWh",
-                money_str,
                 status_badge,
             )
 
@@ -285,18 +313,378 @@ def history(
 
 
 @app.command()
+def channels(
+    sync: bool = typer.Option(False, "--sync", "-s", help="Sincroniza com a API antes de listar (consome 1 chamada por ECU)."),
+    target_date: Optional[str] = typer.Option(None, "--date", help="Data no formato YYYY-MM-DD (padrão: hoje)."),
+):
+    """
+    Lista a geração individual de cada canal DC / painel solar no banco local.
+    """
+    from datetime import date
+
+    settings, session, repo, client, budget, discovery, collector = get_services()
+    try:
+        today_str = target_date or date.today().isoformat()
+        if sync:
+            console.print("[cyan]Sincronizando dados dos canais DC via lote da ECU...[/cyan]")
+            count = collector.sync_channels(target_date=today_str)
+            console.print(f"[bold green]{count} canais sincronizados com sucesso![/bold green]")
+
+        records = repo.get_channel_telemetry_for_date(today_str)
+        if not records:
+            console.print(
+                f"[yellow]Nenhum registro de canal encontrado para {today_str}. "
+                "Execute 'solar channels --sync' para sincronizar com a usina.[/yellow]"
+            )
+            return
+
+        table = Table(title=f"Telemetria por Canal DC ({today_str})", show_header=True)
+        table.add_column("Inversor (UID)", style="cyan")
+        table.add_column("Canal", justify="center", style="blue")
+        table.add_column("Energia Hoje", justify="right", style="green")
+        table.add_column("Potência DC", justify="right")
+        table.add_column("Tensão DC", justify="right")
+        table.add_column("Corrente DC", justify="right")
+
+        for r in records:
+            p_str = f"{r.power_w:.1f} W" if r.power_w is not None else "-"
+            v_str = f"{r.voltage_v:.1f} V" if r.voltage_v is not None else "-"
+            i_str = f"{r.current_a:.2f} A" if r.current_a is not None else "-"
+            table.add_row(
+                r.inverter_uid,
+                str(r.channel),
+                f"{r.energy_today_kwh:.2f} kWh",
+                p_str,
+                v_str,
+                i_str,
+            )
+
+        console.print(table)
+    finally:
+        session.close()
+
+
+@app.command()
+def telemetry(
+    uid: str = typer.Argument(..., help="Número de série (UID) do microinversor a consultar."),
+):
+    """
+    Consulta a telemetria elétrica instantânea fina de um microinversor (V, A, W, °C, Hz).
+    """
+    settings, session, repo, client, budget, discovery, collector = get_services()
+    try:
+        console.print(f"[cyan]Consultando telemetria elétrica detalhada do inversor {uid}...[/cyan]")
+        data = collector.fetch_inverter_telemetry(uid)
+        snap = data.get_latest_snapshot()
+
+        table = Table(title=f"Diagnóstico Elétrico - Inversor {uid} (Horário: {snap['time']})", show_header=True)
+        table.add_column("Canal DC", justify="center", style="cyan")
+        table.add_column("Potência (W)", justify="right", style="green")
+        table.add_column("Tensão DC (V)", justify="right", style="yellow")
+        table.add_column("Corrente DC (A)", justify="right", style="magenta")
+
+        for ch in [1, 2, 3, 4]:
+            p = snap["dc_power_w"].get(ch)
+            v = snap["dc_voltage_v"].get(ch)
+            i = snap["dc_current_a"].get(ch)
+            if any(x is not None for x in [p, v, i]):
+                table.add_row(
+                    str(ch),
+                    f"{p:.1f} W" if p is not None else "-",
+                    f"{v:.1f} V" if v is not None else "-",
+                    f"{i:.2f} A" if i is not None else "-",
+                )
+
+        console.print(table)
+
+        summary_panel = Panel(
+            f"[bold]Potência AC Total:[/bold] {snap['ac_power_w'] or '-'} W\n"
+            f"[bold]Tensão AC da Rede:[/bold] {snap['ac_voltage_v'] or '-'} V\n"
+            f"[bold]Frequência da Rede:[/bold] {snap['frequency_hz'] or '-'} Hz\n"
+            f"[bold]Temperatura Interna:[/bold] {snap['temperature_c'] or '-'} °C",
+            title="Grandezas de Saída AC & Saúde Térmica",
+            border_style="blue",
+        )
+        console.print(summary_panel)
+    except Exception as e:
+        console.print(f"[bold red]Erro ao consultar telemetria:[/bold red] {e}")
+    finally:
+        session.close()
+
+
+@app.command()
+def diagnose(
+    sync: bool = typer.Option(False, "--sync", "-s", help="Sincroniza os canais com a API antes do diagnóstico."),
+    target_date: Optional[str] = typer.Option(None, "--date", help="Data no formato YYYY-MM-DD (padrão: hoje)."),
+    notify: bool = typer.Option(False, "--notify", "-n", help="Dispara notificações caso anomalias sejam identificadas."),
+):
+    """
+    Executa o motor de diagnóstico e detecção de anomalias por painel solar e microinversor.
+    """
+    from datetime import date
+
+    from solar_hub.services.diagnostic import DiagnosticService
+
+    settings, session, repo, client, budget, discovery, collector = get_services()
+    try:
+        today_str = target_date or date.today().isoformat()
+        if sync:
+            console.print("[cyan]Sincronizando telemetria de canais antes do diagnóstico...[/cyan]")
+            collector.sync_channels(target_date=today_str)
+
+        diag_service = DiagnosticService(repository=repo)
+        report = diag_service.diagnose_and_persist(settings.apsystems_system_id, today_str)
+
+        badge_color = "green" if report.health_score >= 90 else "yellow" if report.health_score >= 60 else "red"
+        status_panel = Panel(
+            f"[bold {badge_color}]Índice de Saúde Operacional: {report.health_score}% ({report.status})[/bold {badge_color}]\n"
+            f"• Canais Monitorados: [bold]{report.channels_evaluated}[/bold]\n"
+            f"• Produção Média por Canal: [bold]{report.average_channel_kwh:.2f} kWh[/bold]\n"
+            f"• Anomalias Identificadas: [bold]{len(report.anomalies)}[/bold]",
+            title="Relatório de Diagnóstico de Desempenho",
+            border_style=badge_color,
+        )
+        console.print(status_panel)
+
+        if report.anomalies:
+            table = Table(title="Anomalias e Alertas Detectados", show_header=True)
+            table.add_column("Severidade", justify="center")
+            table.add_column("Tipo", style="cyan")
+            table.add_column("Inversor", style="blue")
+            table.add_column("Canal", justify="center")
+            table.add_column("Diagnóstico", style="white")
+
+            for anom in report.anomalies:
+                sev_badge = (
+                    "[bold red]CRÍTICO[/bold red]"
+                    if anom.severity == "CRITICAL"
+                    else "[bold yellow]ALERTA[/bold yellow]"
+                )
+                table.add_row(
+                    sev_badge,
+                    anom.anomaly_type,
+                    anom.inverter_uid or "-",
+                    str(anom.channel or "-"),
+                    anom.message,
+                )
+            console.print(table)
+
+        if report.recommendations:
+            rec_text = "\n".join(f"• {rec}" for rec in report.recommendations)
+            console.print(Panel(rec_text, title="Recomendações de Ação e Manutenção", border_style="cyan"))
+
+        # Despacho opcional de notificações
+        if notify and collector.notifier:
+            if collector.notifier.has_active_channel:
+                console.print("[cyan]Avaliando e disparando notificações para os canais configurados...[/cyan]")
+                dispatched = collector.notifier.check_diagnostics(report)
+                console.print(f"[bold green]{len(dispatched)} alertas avaliados/despachados com sucesso.[/bold green]")
+            else:
+                console.print("[yellow]Aviso: --notify solicitado, porém nenhum canal configurado no .env.[/yellow]")
+
+    finally:
+        session.close()
+
+
+@app.command(name="test-alert")
+def test_alert():
+    """
+    Envia uma notificação de teste para verificar a conectividade dos canais configurados (Webhook / Telegram).
+    """
+    settings, session, repo, client, budget, discovery, collector = get_services()
+    notifier = collector.notifier
+    try:
+        if not notifier or not notifier.has_active_channel:
+            console.print(
+                "[yellow]Nenhum canal de notificação configurado no arquivo .env!\n"
+                "Defina ALERT_WEBHOOK_URL ou ALERT_TELEGRAM_BOT_TOKEN + ALERT_TELEGRAM_CHAT_ID.[/yellow]"
+            )
+            return
+
+        console.print("[cyan]Disparando notificação de teste imediata (bypass de cooldown)...[/cyan]")
+        result = notifier.send_test_alert()
+
+        channels_info = []
+        for ch, success in result["channels"].items():
+            status_str = "[bold green]OK (Entregue)[/bold green]" if success else "[bold red]FALHA[/bold red]"
+            channels_info.append(f"• Canal {ch.upper()}: {status_str}")
+
+        channels_text = "\n".join(channels_info) if channels_info else "Nenhum canal configurado respondeu."
+        panel_color = "green" if result["success"] else "red"
+
+        console.print(Panel(
+            f"[bold]Resultado do Teste de Alerta:[/bold]\n{channels_text}",
+            title="Diagnóstico de Notificações SolarHub",
+            border_style=panel_color,
+        ))
+    finally:
+        session.close()
+
+
+@app.command(name="alerts")
+def alerts(
+    limit: int = typer.Option(15, "--limit", "-l", help="Quantidade de alertas recentes a exibir."),
+):
+    """
+    Exibe o histórico de alertas e notificações disparadas pelo SolarHub (com status e cooldown).
+    """
+    settings, session, repo, client, budget, discovery, collector = get_services()
+    try:
+        records = repo.get_recent_alerts(settings.apsystems_system_id, limit=limit)
+        if not records:
+            console.print("[yellow]Nenhum alerta registrado até o momento no banco local.[/yellow]")
+            return
+
+        table = Table(title=f"Histórico de Alertas Recentes ({len(records)} eventos)", show_header=True)
+        table.add_column("Horário (UTC)", style="cyan")
+        table.add_column("Severidade", justify="center")
+        table.add_column("Canal", style="magenta")
+        table.add_column("Alerta", style="white")
+        table.add_column("Status", justify="center")
+
+        for r in records:
+            sev_badge = (
+                "[bold red]CRÍTICO[/bold red]"
+                if r.severity == "CRITICAL"
+                else "[bold yellow]ALERTA[/bold yellow]"
+                if r.severity == "WARNING"
+                else "[bold blue]INFO[/bold blue]"
+            )
+            status_badge = "[bold green]Enviado[/bold green]" if r.success else f"[bold red]Erro ({r.error_detail or '-'})[/bold red]"
+            table.add_row(
+                r.dispatched_at.strftime("%Y-%m-%d %H:%M:%S") if r.dispatched_at else "-",
+                sev_badge,
+                r.channel,
+                f"[bold]{r.title}[/bold]: {r.message[:80]}...",
+                status_badge,
+            )
+
+        console.print(table)
+    finally:
+        session.close()
+
+
+@app.command(name="export")
+def export(
+    target: str = typer.Argument("generation", help="Alvo de exportação: 'generation' (agregados diários) ou 'channels' (telemetria multicanal)."),
+    format: str = typer.Option("csv", "--format", "-f", help="Formato de exportação: 'csv' ou 'json'."),
+    start_date: Optional[str] = typer.Option(None, "--start", "-s", help="Data inicial no formato YYYY-MM-DD."),
+    end_date: Optional[str] = typer.Option(None, "--end", "-e", help="Data final no formato YYYY-MM-DD."),
+    inverter_uid: Optional[str] = typer.Option(None, "--uid", "-u", help="Filtrar por UID do microinversor (apenas para channels)."),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Caminho do arquivo de saída (ex: ./export.csv). Se omitido, imprime no terminal."),
+):
+    """
+    Exporta dados analíticos do banco SQLite em CSV ou JSON com ZERO consumo de cota da APsystems.
+    """
+    from pathlib import Path
+
+    from solar_hub.services.export import ExportService
+
+    settings, session, repo, client, budget, discovery, collector = get_services()
+    try:
+        service = ExportService(repository=repo, system_sid=settings.apsystems_system_id)
+        out_path = Path(output) if output else None
+
+        if target.lower() in ("generation", "daily", "geracao"):
+            content = service.export_generation(
+                export_format=format,
+                start_date=start_date,
+                end_date=end_date,
+                output_file=out_path,
+            )
+            count = len(repo.get_daily_aggregates_range(settings.apsystems_system_id, start_date, end_date))
+            target_desc = f"{count} registros diários de geração"
+        elif target.lower() in ("channels", "canais", "panels"):
+            content = service.export_channels(
+                export_format=format,
+                start_date=start_date,
+                end_date=end_date,
+                inverter_uid=inverter_uid,
+                output_file=out_path,
+            )
+            count = len(repo.get_channel_telemetry_range(start_date, end_date, inverter_uid))
+            target_desc = f"{count} registros de telemetria por canal"
+        else:
+            console.print(f"[bold red]Alvo inválido:[/bold red] '{target}'. Escolha entre 'generation' ou 'channels'.")
+            raise typer.Exit(code=1)
+
+        if out_path:
+            console.print(
+                f"[bold green]Sucesso![/bold green] {target_desc} exportados para [cyan]{out_path.resolve()}[/cyan] "
+                f"(Formato: {format.upper()}, Cota API: 0 chamadas)."
+            )
+        else:
+            print(content)
+    finally:
+        session.close()
+
+
+@app.command(name="mqtt-publish")
+def mqtt_publish():
+    """
+    Publica entidades de auto-descoberta e telemetria atual no broker MQTT (Home Assistant Discovery).
+    """
+    from solar_hub.services.mqtt import HomeAssistantMqttService
+
+    settings, session, repo, client, budget, discovery, collector = get_services()
+    try:
+        mqtt_service = collector.mqtt_service
+        if not mqtt_service:
+            mqtt_service = HomeAssistantMqttService(
+                repository=repo,
+                budget=budget,
+                system_sid=settings.apsystems_system_id,
+                broker=settings.mqtt_broker,
+                port=settings.mqtt_port,
+                username=settings.mqtt_username,
+                password=settings.mqtt_password,
+                discovery_prefix=settings.mqtt_discovery_prefix,
+                topic_prefix=settings.mqtt_topic_prefix,
+            )
+
+        console.print(f"[cyan]Conectando ao broker MQTT em {settings.mqtt_broker}:{settings.mqtt_port}...[/cyan]")
+        res = mqtt_service.publish_all()
+        if res.get("success"):
+            console.print(Panel(
+                f"[bold green]Publicação MQTT concluída com sucesso![/bold green]\n"
+                f"• Sensores descobertos (Home Assistant): [bold]{res['sensors_discovered']}[/bold]\n"
+                f"• Tópico de estado: [cyan]{res['state_topic']}[/cyan]\n"
+                f"• Broker: [yellow]{settings.mqtt_broker}:{settings.mqtt_port}[/yellow]",
+                title="Integração Home Assistant MQTT",
+                border_style="green",
+            ))
+        else:
+            console.print(f"[bold red]Falha na publicação MQTT:[/bold red] {res.get('error')}")
+    finally:
+        session.close()
+
+
+@app.command()
 def web(
+
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Endereço de escuta do servidor web."),
     port: int = typer.Option(8000, "--port", "-p", help="Porta TCP do servidor web."),
+    with_daemon: bool = typer.Option(
+        False, "--with-daemon", "-d", help="Inicia automaticamente o coletor em background junto com a interface web."
+    ),
 ):
     """
     Inicia o Dashboard Web Local embutido (100% offline e self-hosted).
     """
+    import os
+
     import uvicorn
+
+    if with_daemon:
+        os.environ["ENABLE_DAEMON"] = "true"
+
+    daemon_status = "[bold green]Ativo (Background)[/bold green]" if with_daemon else "[dim]Desativado (Modo somente leitura)[/dim]"
+
     console.print(Panel(
         f"[bold green]SolarHub Web Dashboard Ativo![/bold green]\n"
         f"Acesse no navegador: [bold cyan]http://{host}:{port}[/bold cyan]\n"
         f"• Persistência em SQLite (Zero requisições de cota para abrir telas)\n"
+        f"• Coletor em Segundo Plano: {daemon_status}\n"
         f"• Chart.js local e offline (Zero rastreamento externo)\n"
         f"• Hall of Fame e UX inspirados no projeto open source [yellow]ez1-monitor[/yellow]\n"
         f"Pressione [bold red]Ctrl+C[/bold red] para encerrar.",

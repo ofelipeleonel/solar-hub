@@ -1,0 +1,51 @@
+# Git & VCS
+.git/
+.gitignore
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local databases & persistent storage (mounted via volume)
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment files
+.env
+.env.*
+
+# Tests & development files
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Local documents & sample files
+*.pdf
+*.docx
+*.doc
+*.xlsx
+*.xls
+samples/
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

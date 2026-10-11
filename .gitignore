@@ -50,3 +50,20 @@ storage/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local user documents, proposals, quotes and sample files (not part of the product)
+*.docx
+*.doc
+*.xlsx
+*.xls
+*CIRLEI*
+*Goiás*
+*DEYE*
+*Sugestoes*
+samples/
+
+# Internal context briefings and third-party proprietary documentation
+CONTEXTO_API_APSYSTEMS.md
+docs/api/
+*.pdf
+

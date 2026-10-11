@@ -1,8 +1,11 @@
 # ☀️ SolarHub (for APsystems)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python: 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Architecture: Offline--First](https://img.shields.io/badge/Architecture-Offline--First-success.svg)](#arquitetura-e-gestão-de-cota)
+[![CI](https://github.com/seu-usuario/solar-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/seu-usuario/solar-hub/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python: 3.11+](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
+[![Docker: Ready](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](Dockerfile)
+[![Architecture: Offline--First](https://img.shields.io/badge/Architecture-Offline--First-success.svg)](#arquitetura-do-sistema)
+
 
 > **Plataforma Open Source, autônoma e soberana de telemetria, diagnóstico e inteligência para usinas solares residenciais baseadas no ecossistema APsystems.**
 
@@ -20,8 +23,18 @@ Diferente de soluções proprietárias fechadas, o **SolarHub** foi projetado es
   * Distribui o orçamento de chamadas de forma inteligente durante o dia.
   * Mantém um "cofre de emergência" para consultas manuais e testes.
 * **Soberania de Dados (Offline-First):** Seus dados são salvos em SQLite local. Dashboards, bots e consultas no terminal rodam a custo **zero de cota**.
-* **Diagnóstico Multicanal:** Suporta leitura independente por canal DC para detecção de sujeira, sombreamento e degradação em cada painel solar individual.
-* **Interface CLI Moderna:** Terminal interativo com tabelas formatadas (`rich`) para acompanhamento rápido de status, inversores e saldo da cota.
+* **Diagnóstico Multicanal & Detecção de Anomalias:** Suporta leitura independente por canal DC para detecção de sujeira, sombreamento, canais desconectados e estresse térmico em cada painel solar individual.
+* **Sistema de Alertas & Notificações (Multicanal com Cooldown Anti-Spam):**
+  * Disparos automáticos via **Webhooks genéricos** (Discord, Slack, Home Assistant, n8n) e **Telegram Bot**.
+  * Alertas para anomalias elétricas graves, sobreaquecimento de microinversores, índice de saúde baixo, geração zero ao meio-dia e cota mensal quase esgotada.
+  * Controle de **cooldown configurável** para evitar tempestades de mensagens repetidas.
+* **Integração Home Assistant (MQTT Discovery Nativo):**
+  * Descoberta automática de sensores no Home Assistant sem precisar escrever YAML: energia do dia, potência dos canais, saúde e temperatura dos inversores.
+* **Métricas Prometheus (`/metrics`):**
+  * Endpoint compatível com scraping padrão do Prometheus e painéis Grafana em tempo real a custo zero de cota.
+* **Interface CLI Moderna:** Terminal interativo com tabelas formatadas (`rich`) para acompanhamento rápido de status, inversores, saldo da cota e histórico de alertas.
+
+
 
 ---
 
@@ -85,7 +98,29 @@ APSYSTEMS_SYSTEM_ID="seu_sid_cadastrado_no_app_ema"
 
 > 🔒 **Segurança:** O arquivo `.env` já está no `.gitignore` e **nunca** será comitado para o GitHub.
 
-### 3. Instalar Dependências
+### 3. Execução com Docker Compose (Recomendado)
+A forma mais simples e robusta para rodar em servidores residenciais, NAS ou Raspberry Pi:
+```bash
+docker compose up -d
+```
+Isso inicia o **Dashboard Web na porta 8000** (`http://localhost:8000`) e o **coletor inteligente em background**, mantendo os dados persistidos no diretório local `./data`.
+
+Para executar comandos pontuais dentro do container Docker:
+```bash
+# Auto-descoberta de hardware
+docker compose run --rm solar-hub solar discover
+
+# Verificar status da usina e cota
+docker compose run --rm solar-hub solar status
+
+# Listar inversores conhecidos
+docker compose run --rm solar-hub solar inverters
+```
+
+---
+
+### 4. Execução Local Alternativa (Python / uv)
+Caso prefira executar sem Docker diretamente no ambiente virtual:
 ```bash
 pip install -e .
 # ou usando uv:
@@ -105,7 +140,7 @@ solar discover
 ```
 
 ### 2. Painel de Status
-Exibe a geração recente (hoje, mês, lifetime, economia estimada) e o saldo da cota:
+Exibe a geração recente (hoje, mês, ano, lifetime) e o saldo da cota:
 ```bash
 solar status
 ```
@@ -134,7 +169,60 @@ Exibe a tabela diária diretamente do SQLite (zero chamadas de API):
 solar history
 ```
 
-### 8. Iniciar o Dashboard Web Local
+### 8. Telemetria Granular por Canal DC (Painel Solar)
+Exibe a geração individual de cada canal e painel solar conectado aos microinversores:
+```bash
+solar channels
+# Para forçar uma sincronização prévia com a API:
+solar channels --sync
+```
+
+### 9. Diagnóstico Elétrico Fino do Inversor (V, A, W, °C, Hz)
+Consulta instantânea de grandezas elétricas e térmicas de um microinversor específico:
+```bash
+solar telemetry <UID_DO_INVERSOR>
+```
+
+### 10. Motor de Diagnóstico e Detecção de Anomalias
+Analisa desvios estatísticos entre placas (detecção de sujeira, sombreamento, canal desconectado e sobreaquecimento):
+```bash
+solar diagnose
+# Para avaliar e disparar notificações imediatas se encontrar anomalias:
+solar diagnose --notify
+```
+
+### 11. Testar Canais de Notificação (Webhook & Telegram)
+Envia uma mensagem de teste imediata contornando o cooldown para validar URLs e tokens:
+```bash
+solar test-alert
+```
+
+### 12. Histórico Local de Alertas e Notificações
+Exibe o registro de alertas disparados e seu status de entrega:
+```bash
+solar alerts
+```
+
+### 13. Exportar Dados Locais (CSV / JSON com Zero Cota)
+Exporta séries históricas de geração ou telemetria multicanal diretamente do SQLite:
+```bash
+# Exportar geração diária em CSV para arquivo
+solar export generation -f csv -o relatorio_solar.csv
+
+# Exportar geração filtrando período em JSON
+solar export generation -f json --start 2026-10-01 --end 2026-10-31
+
+# Exportar telemetria de canais filtrada por microinversor
+solar export channels -f csv --uid 401000001234 -o canais_inv1.csv
+```
+
+### 14. Publicar Estado no Broker MQTT (Home Assistant)
+Registra as entidades de auto-descoberta e envia o estado atual para o broker MQTT:
+```bash
+solar mqtt-publish
+```
+
+### 15. Iniciar o Dashboard Web Local
 Inicia o servidor web leve e responsivo (porta padrão 8000):
 ```bash
 solar web
@@ -142,11 +230,37 @@ solar web
 
 ---
 
+## 📡 Observabilidade & Smart Home (Home Assistant & Prometheus)
+
+### 1. Home Assistant (MQTT Discovery)
+Ao habilitar `MQTT_ENABLED=true` no `.env`, o **SolarHub** envia mensagens de auto-descoberta (`homeassistant/sensor/.../config`). Seus sensores aparecem imediatamente no painel de dispositivos do Home Assistant:
+* **Entidades Criadas Automaticamente:**
+  * `sensor.solar_energy_today` (dispositivo de energia compatível com o Energy Dashboard)
+  * `sensor.solar_operational_health` (score 0-100%)
+  * `sensor.solar_budget_remaining` (saldo mensal de chamadas da API)
+  * Sensores individuais de potência e kWh por canal DC / painel solar.
+
+### 2. Scraping Prometheus & Dashboards Grafana
+O servidor expõe nativamente métricas no formato padrão do Prometheus:
+```bash
+curl http://localhost:8000/metrics
+```
+* **Métricas Disponíveis:**
+  * `solar_today_kwh`
+  * `solar_capacity_kwp`
+  * `solar_health_score`
+  * `solar_budget_calls_this_month`, `solar_budget_monthly_limit`, `solar_budget_remaining`
+  * `solar_channel_energy_today_kwh{inverter_uid="...",channel="1"}`
+  * `solar_channel_power_watts{inverter_uid="...",channel="1"}`
+  * `solar_inverter_temperature_celsius{inverter_uid="..."}`
+
+---
+
 ## 🌐 Dashboard Web Local (100% Offline & Self-Hosted)
 
 O **SolarHub** inclui um Dashboard Web moderno, leve e totalmente self-hosted:
 * **Zero CDNs ou Fontes Externas:** Chart.js embutido localmente, garantindo total privacidade e velocidade instantânea.
-* **Hero Cards:** Geração do dia (kWh), economia financeira estimada na moeda local, potência instalada e saldo da cota mensal.
+* **Hero Cards:** Geração do dia (kWh), microinversores ativos, potência instalada e saldo da cota mensal.
 * **🏆 Hall of Fame:** Painel que destaca o recorde histórico de melhor dia de geração de todos os tempos.
 * **Gráfico Interativo:** Curva diária de geração navegável e responsiva (desktop e celular).
 * **Grid de Microinversores:** Mapeamento visual de cada inversor físico e seus canais DC.
@@ -156,6 +270,7 @@ Para iniciar, basta rodar:
 solar web
 ```
 E acessar `http://localhost:8000` no seu navegador.
+
 
 ---
 
@@ -179,12 +294,15 @@ Estendemos nossos sinceros créditos e agradecimentos à comunidade e ao autor p
 
 ## 🤝 Como Contribuir
 
-Contribuições são muito bem-vindas!
+Contribuições são muito bem-vindas! Consulte o guia completo em [CONTRIBUTING.md](CONTRIBUTING.md) para diretrizes de desenvolvimento, arquitetura agnóstica de cota e padrões de código.
+
 1. Faça um Fork do projeto
 2. Crie sua branch de funcionalidade (`git checkout -b feature/nova-integracao`)
-3. Faça o commit das alterações (`git commit -m 'feat: adiciona nova funcionalidade'`)
-4. Suba para o GitHub (`git push origin feature/nova-integracao`)
-5. Abra um Pull Request
+3. Execute a suíte de testes (`pytest`) e o linter (`ruff check .`)
+4. Faça o commit das alterações (`git commit -m 'feat: adiciona nova funcionalidade'`)
+5. Suba para o GitHub (`git push origin feature/nova-integracao`)
+6. Abra um Pull Request
+
 
 ---
 
