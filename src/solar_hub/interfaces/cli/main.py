@@ -313,6 +313,53 @@ def history(
 
 
 @app.command()
+def backfill(
+    month: Optional[str] = typer.Option(
+        None, "--month", "-m", help="Mês para recuperação no formato YYYY-MM (ex: 2026-10). Padrão: mês atual."
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Força a execução ignorando restrições do Budget Keeper."
+    ),
+):
+    """
+    Recupera retroativamente o histórico diário de um mês inteiro consumindo APENAS 1 chamada da API.
+    """
+    from datetime import date
+
+    from solar_hub.core.exceptions import BudgetKeeperBlockError, QuotaExceededError
+
+    target_month = month or date.today().strftime("%Y-%m")
+    settings, session, repo, client, budget, discovery, collector = get_services()
+    try:
+        console.print(f"[cyan]Iniciando recuperação histórica (backfill) para o mês {target_month}...[/cyan]")
+        res = collector.backfill_monthly_history(year_month=target_month, force=force)
+        console.print(Panel(
+            f"[bold green]{res['message']}[/bold green]\n"
+            f"Mês: [bold]{res['month']}[/bold]\n"
+            f"Dias consolidados: [bold]{res['records_synced']}[/bold]\n"
+            f"Custo de Cota: [green]1 requisição OpenAPI[/green]",
+            title="Resultado do Backfill Histórico",
+            border_style="green",
+        ))
+    except QuotaExceededError:
+        console.print(Panel(
+            f"[bold red]Cota da API esgotada na nuvem APsystems (Código 2005)![/bold red]\n\n"
+            f"A sua conta OpenAPI atingiu o limite contratual de 1.000 requisições mensais.\n"
+            f"Assim que o mês virar (ou a APsystems renovar o acesso), execute este mesmo comando:\n"
+            f"[bold cyan]solar backfill --month {target_month}[/bold cyan]\n"
+            f"Ele recuperará todos os dias ausentes com apenas 1 única requisição.",
+            title="Cota Esgotada na Nuvem",
+            border_style="red",
+        ))
+    except BudgetKeeperBlockError as bke:
+        console.print(f"[bold yellow]Operação prevenida pelo Guardião de Cota:[/bold yellow] {bke.reason}")
+    except Exception as e:
+        console.print(f"[bold red]Erro ao executar backfill:[/bold red] {e}")
+    finally:
+        session.close()
+
+
+@app.command()
 def channels(
     sync: bool = typer.Option(False, "--sync", "-s", help="Sincroniza com a API antes de listar (consome 1 chamada por ECU)."),
     target_date: Optional[str] = typer.Option(None, "--date", help="Data no formato YYYY-MM-DD (padrão: hoje)."),

@@ -103,3 +103,74 @@ def test_collector_blocks_when_budget_keeper_denies():
 
     with pytest.raises(BudgetKeeperBlockError):
         service.sync_current(force=False)
+
+
+def test_collector_backfill_monthly_history_success():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    session = sessionmaker(bind=engine)()
+    repo = SolarRepository(session)
+
+    mock_client = MagicMock()
+    # Simula resposta da APsystems para energy_level='daily', date_range='2026-10'
+    mock_client.get_system_energy.return_value = {
+        "energy": [15.2, 16.8, 14.0, 19.5],
+        "time": ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"],
+    }
+    mock_budget = MagicMock()
+
+    service = CollectorService(
+        client=mock_client,
+        repository=repo,
+        budget=mock_budget,
+        sid="TEST_SYS_001",
+    )
+
+    res = service.backfill_monthly_history("2026-10", force=True)
+
+    assert res["success"] is True
+    assert res["records_synced"] == 4
+    assert res["month"] == "2026-10"
+
+    # Confirma que os registros foram persistidos no banco
+    records = repo.get_daily_aggregates_range("TEST_SYS_001", "2026-10-01", "2026-10-04")
+    assert len(records) == 4
+    assert records[0].date == "2026-10-01"
+    assert records[0].energy_kwh == 15.2
+    assert records[3].date == "2026-10-04"
+    assert records[3].energy_kwh == 19.5
+
+
+def test_collector_handles_quota_exceeded():
+    from solar_hub.core.exceptions import QuotaExceededError
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    session = sessionmaker(bind=engine)()
+    repo = SolarRepository(session)
+
+    mock_client = MagicMock()
+    mock_client.get_system_summary.side_effect = QuotaExceededError(
+        code=2005,
+        message="The access limit of the application account was exceeded",
+        endpoint="/user/api/v2/systems/summary/TEST_SYS_001",
+    )
+    mock_budget = MagicMock()
+
+    service = CollectorService(
+        client=mock_client,
+        repository=repo,
+        budget=mock_budget,
+        sid="TEST_SYS_001",
+    )
+
+    with pytest.raises(QuotaExceededError):
+        service.sync_current(force=False)
+
+    # Verifica se marcou a cota como esgotada no budget
+    mock_budget.mark_quota_exhausted.assert_called_once()
+    # Verifica se registrou a auditoria com código 2005
+    calls = session.query(SolarRepository(session).record_api_call.__annotations__["return"]).all()
+    assert len(calls) == 1
+    assert calls[0].status_code == 2005
+    assert calls[0].success is False

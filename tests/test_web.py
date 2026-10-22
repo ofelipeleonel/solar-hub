@@ -198,5 +198,43 @@ def test_api_mqtt_publish_endpoint(client, monkeypatch):
     assert "mock" in data["message"]
 
 
+def test_api_sync_quota_exceeded(client, monkeypatch):
+    import solar_hub.interfaces.web.app as web_app
+    from solar_hub.core.exceptions import QuotaExceededError
+
+    # Reseta o rate limit para o teste
+    web_app.last_manual_sync_timestamp = 0.0
+
+    def mock_sync_current(self, force=False):
+        raise QuotaExceededError(code=2005, message="Quota limit exceeded", endpoint="/test")
+
+    monkeypatch.setattr("solar_hub.services.collector.CollectorService.sync_current", mock_sync_current)
+
+    res = client.post("/api/sync", json={"force": False})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is False
+    assert data.get("quota_exhausted") is True
+    assert "2005" in data["message"]
+
+
+def test_api_backfill_endpoint(client, monkeypatch):
+    def mock_backfill(self, year_month, force=False):
+        return {
+            "success": True,
+            "month": year_month,
+            "records_synced": 14,
+            "message": "Mocked backfill ok",
+        }
+
+    monkeypatch.setattr("solar_hub.services.collector.CollectorService.backfill_monthly_history", mock_backfill)
+
+    res = client.post("/api/backfill", json={"month": "2026-10", "force": False})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["records_synced"] == 14
+
+
 
 

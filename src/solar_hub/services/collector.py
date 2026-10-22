@@ -3,14 +3,14 @@ import threading
 import time as time_module
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
     from solar_hub.services.mqtt import HomeAssistantMqttService
     from solar_hub.services.notification import NotificationService
 
 from solar_hub.client.client import APsystemsClient
-from solar_hub.core.exceptions import BudgetKeeperBlockError
+from solar_hub.core.exceptions import BudgetKeeperBlockError, QuotaExceededError
 from solar_hub.db.repository import SolarRepository
 from solar_hub.services.budget import BudgetKeeperService
 
@@ -67,7 +67,18 @@ class CollectorService:
         logger.info(f"Executando sincronização para usina {self.sid} em {today_str}...")
 
         # 2. Faz a chamada pontual de resumo
-        summary = self.client.get_system_summary(self.sid)
+        try:
+            summary = self.client.get_system_summary(self.sid)
+        except QuotaExceededError as qe:
+            self.budget.mark_quota_exhausted(str(qe))
+            self.repository.record_api_call(
+                endpoint=f"/user/api/v2/systems/summary/{self.sid}",
+                method="GET",
+                status_code=2005,
+                success=False,
+                notes="Quota Exceeded (2005)",
+            )
+            raise
 
         # 3. Registra auditoria da chamada no banco
         self.repository.record_api_call(
@@ -122,7 +133,19 @@ class CollectorService:
         today_str = date.today().isoformat()
         logger.info(f"Executando consolidação noturna definitiva de {today_str}...")
 
-        summary = self.client.get_system_summary(self.sid)
+        try:
+            summary = self.client.get_system_summary(self.sid)
+        except QuotaExceededError as qe:
+            self.budget.mark_quota_exhausted(str(qe))
+            self.repository.record_api_call(
+                endpoint=f"/user/api/v2/systems/summary/{self.sid}",
+                method="GET",
+                status_code=2005,
+                success=False,
+                notes="Quota Exceeded no Fechamento Noturno (2005)",
+            )
+            raise
+
         self.repository.record_api_call(
             endpoint=f"/user/api/v2/systems/summary/{self.sid}",
             method="GET",
@@ -162,12 +185,23 @@ class CollectorService:
 
         for ecu in ecus:
             logger.info(f"Coletando lote de canais para ECU {ecu.eid} em {today_str}...")
-            batch_data = self.client.get_inverter_batch_energy(
-                sid=self.sid,
-                eid=ecu.eid,
-                date_range=today_str,
-                energy_level="energy",
-            )
+            try:
+                batch_data = self.client.get_inverter_batch_energy(
+                    sid=self.sid,
+                    eid=ecu.eid,
+                    date_range=today_str,
+                    energy_level="energy",
+                )
+            except QuotaExceededError as qe:
+                self.budget.mark_quota_exhausted(str(qe))
+                self.repository.record_api_call(
+                    endpoint=f"/user/api/v2/systems/{self.sid}/devices/inverter/batch/energy/{ecu.eid}",
+                    method="GET",
+                    status_code=2005,
+                    success=False,
+                    notes=f"Quota Exceeded Sync Canais ECU {ecu.eid}",
+                )
+                raise
             self.repository.record_api_call(
                 endpoint=f"/user/api/v2/systems/{self.sid}/devices/inverter/batch/energy/{ecu.eid}",
                 method="GET",
@@ -245,10 +279,11 @@ class CollectorService:
         stop_event: Optional[threading.Event] = None,
     ) -> None:
         """
-        Loop contínuo de background (Daemon).
+        Loop contínuo de background (Daemon) com resiliência estrita e proteção de cota.
         - Coleta diurna no intervalo configurado (respeitando a janela solar).
-        - Executa o fechamento noturno às 20:00.
-        - Entra em hibernação noturna profunda durante a madrugada (0 chamadas).
+        - Executa o fechamento noturno às 20:00 (com limite seguro de tentativas).
+        - Entra em hibernação profunda se a cota for esgotada na nuvem (Erro 2005) ou durante a madrugada.
+        - Evita qualquer retry tempestivo de 30s em caso de erro.
         """
         logger.info(
             f"Iniciando Coletor Daemon SolarHub (Intervalo: {interval_minutes}min, "
@@ -257,50 +292,97 @@ class CollectorService:
 
         last_sync_time: Optional[datetime] = None
         last_finalized_date: Optional[str] = None
+        nightly_attempts: int = 0
+        last_nightly_attempt_time: Optional[datetime] = None
 
         while stop_event is None or not stop_event.is_set():
-            now = datetime.now()
-            today_str = now.date().isoformat()
-            budget_status = self.budget.get_status(now)
+            try:
+                now = datetime.now()
+                today_str = now.date().isoformat()
+                budget_status = self.budget.get_status(now)
 
-            # 1. Checagem de Fechamento Noturno (ex: ~20:00)
-            is_nightly_window = (
-                now.time().hour == self.nightly_time_obj.hour
-                and now.time().minute >= self.nightly_time_obj.minute
-            )
+                # Se a cota mensal OpenAPI estiver esgotada na nuvem (Erro 2005), suspende coletas
+                if budget_status.quota_exhausted:
+                    logger.warning(
+                        "Daemon SolarHub em modo de repouso: Cota OpenAPI da APsystems esgotada na nuvem (Código 2005). "
+                        "Aguardando virada do mês..."
+                    )
+                    if stop_event:
+                        if stop_event.wait(timeout=300):
+                            break
+                    else:
+                        time_module.sleep(300)
+                    continue
 
-            if is_nightly_window and last_finalized_date != today_str:
-                try:
-                    logger.info("Horário de consolidação noturna atingido!")
-                    res = self.consolidate_nightly(force=True)
-                    last_finalized_date = today_str
-                    logger.info(f"Dia {today_str} consolidado: {res.energy_today_kwh:.2f} kWh gerados.")
-                except Exception as e:
-                    logger.error(f"Erro na consolidação noturna: {e}")
+                # 1. Checagem de Fechamento Noturno (ex: ~20:00)
+                is_nightly_window = (
+                    now.time().hour == self.nightly_time_obj.hour
+                    and now.time().minute >= self.nightly_time_obj.minute
+                )
 
-            # 2. Checagem de Coleta Diurna (Janela Solar Ativa)
-            elif budget_status.is_solar_window:
-                should_sync = False
-                if last_sync_time is None:
-                    should_sync = True
-                else:
-                    elapsed = (now - last_sync_time).total_seconds() / 60.0
-                    if elapsed >= interval_minutes:
+                if is_nightly_window and last_finalized_date != today_str:
+                    # Máximo de 2 tentativas noturnas espaçadas em 10 minutos
+                    can_attempt_nightly = False
+                    if last_nightly_attempt_time is None:
+                        can_attempt_nightly = True
+                    elif (now - last_nightly_attempt_time).total_seconds() >= 600:
+                        can_attempt_nightly = True
+
+                    if can_attempt_nightly:
+                        last_nightly_attempt_time = now
+                        nightly_attempts += 1
+                        try:
+                            logger.info("Horário de consolidação noturna atingido!")
+                            res = self.consolidate_nightly(force=True)
+                            last_finalized_date = today_str
+                            nightly_attempts = 0
+                            logger.info(f"Dia {today_str} consolidado: {res.energy_today_kwh:.2f} kWh gerados.")
+                        except QuotaExceededError as qe:
+                            logger.critical(f"Cota da APsystems esgotada no fechamento noturno: {qe}")
+                            self.budget.mark_quota_exhausted(str(qe))
+                            last_finalized_date = today_str
+                        except Exception as e:
+                            logger.error(f"Erro na consolidação noturna (tentativa {nightly_attempts}/2): {e}")
+                            if nightly_attempts >= 2:
+                                logger.warning(
+                                    f"Limite de tentativas noturnas atingido para {today_str}. Encerrando tentativas do dia."
+                                )
+                                last_finalized_date = today_str
+
+                # 2. Checagem de Coleta Diurna (Janela Solar Ativa)
+                elif budget_status.is_solar_window:
+                    should_sync = False
+                    if last_sync_time is None:
                         should_sync = True
+                    else:
+                        elapsed = (now - last_sync_time).total_seconds() / 60.0
+                        if elapsed >= interval_minutes:
+                            should_sync = True
 
-                if should_sync and budget_status.can_request_now:
-                    try:
-                        logger.info("Janela solar ativa: executando sincronização periódica...")
-                        res = self.sync_current(force=False)
+                    if should_sync and budget_status.can_request_now:
+                        # Atualiza last_sync_time preventivamente para impedir retry imediato em caso de erro de rede
                         last_sync_time = now
-                        logger.info(
-                            f"Sync realizado: {res.energy_today_kwh:.2f} kWh hoje. "
-                            f"(Próxima coleta em ~{interval_minutes}min)"
-                        )
-                    except BudgetKeeperBlockError as bke:
-                        logger.warning(f"Coleta prevenida pelo Budget Keeper: {bke}")
-                    except Exception as e:
-                        logger.error(f"Erro inesperado durante a coleta diurna: {e}")
+                        try:
+                            logger.info("Janela solar ativa: executando sincronização periódica...")
+                            res = self.sync_current(force=False)
+                            logger.info(
+                                f"Sync realizado: {res.energy_today_kwh:.2f} kWh hoje. "
+                                f"(Próxima coleta em ~{interval_minutes}min)"
+                            )
+                        except BudgetKeeperBlockError as bke:
+                            logger.warning(f"Coleta prevenida pelo Budget Keeper: {bke}")
+                        except QuotaExceededError as qe:
+                            logger.critical(f"Cota da APsystems esgotada durante a coleta diurna: {qe}")
+                            self.budget.mark_quota_exhausted(str(qe))
+                        except Exception as e:
+                            logger.error(f"Erro inesperado durante a coleta diurna: {e}")
+
+            except Exception as loop_err:
+                logger.error(f"Erro inesperado no loop do daemon SolarHub: {loop_err}", exc_info=True)
+                try:
+                    self.repository.session.rollback()
+                except Exception:
+                    pass
 
             # Pausa de 30 segundos entre checagens do loop
             if stop_event:
@@ -310,3 +392,87 @@ class CollectorService:
                 time_module.sleep(30)
 
         logger.info("Coletor Daemon SolarHub encerrado com sucesso.")
+
+    def backfill_monthly_history(self, year_month: str, force: bool = False) -> Dict[str, Any]:
+        """
+        Recupera retroativamente a série histórica diária de um mês inteiro
+        utilizando APENAS 1 ÚNICA REQUISIÇÃO à OpenAPI da APsystems.
+        Formato de year_month: 'YYYY-MM' (ex: '2026-10').
+        """
+        self.budget.verify_can_request(force=force)
+        logger.info(f"Iniciando backfill histórico mensal para usina {self.sid} no mês {year_month}...")
+
+        try:
+            raw_data = self.client.get_system_energy(
+                sid=self.sid,
+                energy_level="daily",
+                date_range=year_month,
+            )
+            self.repository.record_api_call(
+                endpoint=f"/user/api/v2/systems/energy/{self.sid}",
+                method="GET",
+                status_code=200,
+                success=True,
+                notes=f"Backfill Histórico Mensal: {year_month}",
+            )
+        except QuotaExceededError as qe:
+            self.budget.mark_quota_exhausted(str(qe))
+            self.repository.record_api_call(
+                endpoint=f"/user/api/v2/systems/energy/{self.sid}",
+                method="GET",
+                status_code=2005,
+                success=False,
+                notes="Quota Exceeded no Backfill (2005)",
+            )
+            raise
+
+        records_synced = 0
+        today_str = date.today().isoformat()
+
+        # Parseamento flexível do formato retornado pela APsystems
+        # Suporta dicionários {"energy": [...], "time": [...]}, lista direta [...], ou lista de objetos
+        if isinstance(raw_data, dict):
+            energy_list = raw_data.get("energy", [])
+            time_list = raw_data.get("time", [])
+        elif isinstance(raw_data, list):
+            energy_list = raw_data
+            time_list = []
+        else:
+            energy_list = []
+            time_list = []
+
+        if isinstance(energy_list, list):
+            for idx, val in enumerate(energy_list):
+                try:
+                    energy_val = float(val) if val is not None else 0.0
+                except (ValueError, TypeError):
+                    continue
+
+                if idx < len(time_list):
+                    d_str = str(time_list[idx])
+                    if len(d_str) <= 2:
+                        day_num = int(d_str)
+                        d_str = f"{year_month}-{day_num:02d}"
+                else:
+                    day_num = idx + 1
+                    d_str = f"{year_month}-{day_num:02d}"
+
+                # Ignora dias futuros
+                if d_str > today_str:
+                    continue
+
+                is_final = d_str < today_str
+                self.repository.upsert_daily_aggregate(
+                    system_sid=self.sid,
+                    target_date=d_str,
+                    energy_kwh=energy_val,
+                    is_finalized=is_final,
+                )
+                records_synced += 1
+
+        return {
+            "success": True,
+            "month": year_month,
+            "records_synced": records_synced,
+            "message": f"Backfill concluído: {records_synced} dias consolidados no SQLite para o mês {year_month}.",
+        }

@@ -64,3 +64,20 @@ def test_budget_keeper_exhausted_monthly_limit():
     assert status.remaining_month == 0
     assert status.can_request_now is False
     assert "esgotada" in status.reason.lower()
+
+
+def test_budget_keeper_cloud_quota_exhausted_flag():
+    mock_repo = MagicMock()
+    mock_repo.count_api_calls_this_month.return_value = 100
+    mock_repo.count_api_calls_today.return_value = 5
+    mock_repo.get_setting.side_effect = lambda k, default=None: (
+        "true" if k == "quota_exhausted" else ("2026-10" if k == "quota_exhausted_month" else "Erro 2005")
+    )
+
+    service = BudgetKeeperService(repository=mock_repo)
+    dt_day = datetime(2026, 10, 22, 12, 0, 0)
+    status = service.get_status(current_dt=dt_day)
+
+    assert status.quota_exhausted is True
+    assert status.can_request_now is False
+    assert "Código 2005" in status.reason

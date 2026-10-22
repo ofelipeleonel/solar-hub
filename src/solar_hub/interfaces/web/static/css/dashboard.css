@@ -721,6 +721,54 @@ dialog.modal-dialog::backdrop {
 }
 
 /* Footer & Créditos */
+.quota-warning-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: var(--radius-card);
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  animation: fadeIn 0.3s ease;
+}
+
+.quota-banner-icon {
+  font-size: 28px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.quota-banner-content {
+  flex: 1;
+}
+
+.quota-banner-title {
+  font-weight: 700;
+  font-size: 15px;
+  color: #f87171;
+  margin-bottom: 4px;
+}
+
+.quota-banner-desc {
+  font-size: 13px;
+  color: #cbd5e1;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.quota-banner-action {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 footer {
   margin-top: 48px;
   padding-top: 24px;

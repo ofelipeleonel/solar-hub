@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from solar_hub.client.client import APsystemsClient
 from solar_hub.core.config import Settings
+from solar_hub.core.exceptions import BudgetKeeperBlockError, QuotaExceededError
 from solar_hub.core.security import is_safe_webhook_url, require_auth
 from solar_hub.db.database import get_session_factory, init_db
 from solar_hub.db.models import DailyAggregateRecord
@@ -54,6 +55,11 @@ class SettingsUpdatePayload(BaseModel):
 class SyncPayload(BaseModel):
     force: bool = False
     sync_channels: bool = False
+
+
+class BackfillPayload(BaseModel):
+    month: Optional[str] = None
+    force: bool = False
 
 
 
@@ -226,6 +232,8 @@ def get_status() -> Dict[str, Any]:
                 "daily_budget_target": budget_status.daily_budget_target,
                 "is_solar_window": budget_status.is_solar_window,
                 "reason": budget_status.reason,
+                "quota_exhausted": budget_status.quota_exhausted,
+                "quota_exhausted_message": budget_status.quota_exhausted_message,
             }
         }
     finally:
@@ -586,17 +594,103 @@ def trigger_sync(payload: Optional[SyncPayload] = None) -> Dict[str, Any]:
             mqtt_service=mqtt_service,
         )
 
-        res = collector.sync_current(force=force)
-        channels_updated = 0
-        if sync_channels:
-            channels_updated = collector.sync_channels(force=force)
+        try:
+            res = collector.sync_current(force=force)
+            channels_updated = 0
+            if sync_channels:
+                channels_updated = collector.sync_channels(force=force)
 
-        return {
-            "success": res.success,
-            "message": res.message,
-            "today_kwh": res.energy_today_kwh,
-            "channels_updated": channels_updated,
-        }
+            return {
+                "success": res.success,
+                "message": res.message,
+                "today_kwh": res.energy_today_kwh,
+                "channels_updated": channels_updated,
+            }
+        except QuotaExceededError:
+            return {
+                "success": False,
+                "quota_exhausted": True,
+                "message": (
+                    "A cota mensal de 1.000 requisições da sua conta OpenAPI APsystems foi esgotada na nuvem (Código 2005). "
+                    "As consultas com a usina estão suspensas até o primeiro dia do próximo mês para proteger sua conta. "
+                    "Seus dados locais continuam intactos."
+                ),
+                "today_kwh": 0.0,
+                "channels_updated": 0,
+            }
+        except BudgetKeeperBlockError as bke:
+            return {
+                "success": False,
+                "message": f"Sincronização prevenida pelo Guardião de Cota: {bke.reason}",
+                "today_kwh": 0.0,
+                "channels_updated": 0,
+            }
+        except Exception as e:
+            logger.error(f"Erro ao sincronizar manualmente: {e}")
+            return {
+                "success": False,
+                "message": f"Falha na comunicação com a APsystems: {e}",
+                "today_kwh": 0.0,
+                "channels_updated": 0,
+            }
+    finally:
+        session.close()
+
+
+@app.post("/api/backfill")
+def trigger_backfill(payload: Optional[BackfillPayload] = None) -> Dict[str, Any]:
+    """
+    Executa a recuperação histórica retroativa (Backfill) de um mês inteiro
+    utilizando apenas 1 única requisição à OpenAPI da APsystems.
+    """
+    from datetime import date
+
+    target_month = (payload.month if payload and payload.month else None) or date.today().strftime("%Y-%m")
+    force = payload.force if payload else False
+
+    settings, session, repo, budget = get_repo_and_settings()
+    try:
+        client = APsystemsClient(
+            app_id=settings.apsystems_app_id,
+            app_secret=settings.apsystems_app_secret,
+            base_url=settings.apsystems_base_url,
+        )
+        collector = CollectorService(
+            client=client,
+            repository=repo,
+            budget=budget,
+            sid=settings.apsystems_system_id,
+        )
+        try:
+            result = collector.backfill_monthly_history(year_month=target_month, force=force)
+            return result
+        except QuotaExceededError:
+            return {
+                "success": False,
+                "quota_exhausted": True,
+                "message": (
+                    "A cota mensal OpenAPI APsystems está esgotada (Código 2005). "
+                    "A recuperação histórica poderá ser realizada assim que a cota for renovada no dia 01 do próximo mês "
+                    "(ou caso liberada pela APsystems)."
+                ),
+                "month": target_month,
+                "records_synced": 0,
+            }
+        except BudgetKeeperBlockError as bke:
+            return {
+                "success": False,
+                "message": f"Recuperação prevenida pelo Guardião de Cota: {bke.reason}",
+                "month": target_month,
+                "records_synced": 0,
+            }
+        except Exception as e:
+            logger.error(f"Erro ao executar backfill histórico: {e}")
+            return {
+                "success": False,
+                "message": f"Falha ao recuperar histórico: {e}",
+                "month": target_month,
+                "records_synced": 0,
+            }
     finally:
         session.close()
 

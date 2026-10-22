@@ -27,8 +27,24 @@ async function loadDashboard() {
     document.getElementById("val-today-kwh").innerText = `${status.today_kwh.toFixed(2)} kWh`;
     document.getElementById("val-inverters").innerText = `${status.total_inverters} unidades`;
     document.getElementById("val-capacity").innerText = `${status.capacity_kwp.toFixed(2)} kWp`;
-    document.getElementById("val-budget-remaining").innerText = `${status.budget.remaining_month} / ${status.budget.monthly_limit}`;
-    document.getElementById("sub-budget").innerText = `Hoje: ${status.budget.calls_today} reqs | Janela: ${status.budget.is_solar_window ? "Ativa ☀️" : "Noite 🌙"}`;
+
+    // Banner de Alerta e Governança de Cota
+    const bannerEl = document.getElementById("quota-warning-banner");
+    const budgetValEl = document.getElementById("val-budget-remaining");
+    const subBudgetEl = document.getElementById("sub-budget");
+
+    if (status.budget && status.budget.quota_exhausted) {
+      if (bannerEl) bannerEl.style.display = "flex";
+      budgetValEl.innerText = "0 / 1000 (Esgotada)";
+      budgetValEl.style.color = "var(--accent-red)";
+      subBudgetEl.innerText = "Cota OpenAPI Esgotada na Nuvem (Código 2005) 🔒";
+    } else {
+      if (bannerEl) bannerEl.style.display = "none";
+      budgetValEl.innerText = `${status.budget.remaining_month} / ${status.budget.monthly_limit}`;
+      budgetValEl.style.color = "";
+      subBudgetEl.innerText = `Hoje: ${status.budget.calls_today} reqs | Janela: ${status.budget.is_solar_window ? "Ativa ☀️" : "Noite 🌙"}`;
+    }
+
     document.getElementById("system-name").innerText = `${status.system_name} (ID: ${status.sid})`;
 
     // Status light
@@ -415,6 +431,58 @@ async function triggerSync() {
 }
 
 // ==============================================================================
+// Recuperação Histórica Retroativa (Backfill - 1 Requisição OpenAPI)
+// ==============================================================================
+
+async function triggerBackfill() {
+  const btnHeader = document.getElementById("btn-backfill");
+  const btnChart = document.getElementById("btn-chart-backfill");
+
+  const originalHeaderText = btnHeader ? btnHeader.innerHTML : "";
+  const originalChartText = btnChart ? btnChart.innerHTML : "";
+
+  if (btnHeader) {
+    btnHeader.disabled = true;
+    btnHeader.innerText = "Recuperando mês...";
+  }
+  if (btnChart) {
+    btnChart.disabled = true;
+    btnChart.innerText = "Recuperando...";
+  }
+
+  try {
+    const res = await fetch("/api/backfill", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force: false })
+    });
+    const result = await res.json();
+
+    if (result.success) {
+      showToast(`Sucesso! ${result.records_synced} dias históricos foram sincronizados com apenas 1 requisição.`, "success");
+      await loadDashboard();
+    } else if (result.quota_exhausted) {
+      showToast(result.message, "error");
+      await loadDashboard();
+    } else {
+      showToast("Aviso: " + (result.message || "Não foi possível recuperar o histórico."), "warning");
+    }
+  } catch (err) {
+    console.error("Erro no backfill histórico:", err);
+    showToast("Erro de conexão ao recuperar histórico da usina.", "error");
+  } finally {
+    if (btnHeader) {
+      btnHeader.disabled = false;
+      btnHeader.innerHTML = originalHeaderText;
+    }
+    if (btnChart) {
+      btnChart.disabled = false;
+      btnChart.innerHTML = originalChartText;
+    }
+  }
+}
+
+// ==============================================================================
 // Exportação de Dados
 // ==============================================================================
 
@@ -465,6 +533,11 @@ function showToast(message, type = "info") {
 document.addEventListener("DOMContentLoaded", () => {
   // Inicialização de botões
   document.getElementById("btn-sync").addEventListener("click", triggerSync);
+  const btnBackfill = document.getElementById("btn-backfill");
+  if (btnBackfill) btnBackfill.addEventListener("click", triggerBackfill);
+  const btnChartBackfill = document.getElementById("btn-chart-backfill");
+  if (btnChartBackfill) btnChartBackfill.addEventListener("click", triggerBackfill);
+
   document.getElementById("btn-open-settings").addEventListener("click", () => openModal("modal-settings"));
   document.getElementById("btn-open-export").addEventListener("click", () => openModal("modal-export"));
 

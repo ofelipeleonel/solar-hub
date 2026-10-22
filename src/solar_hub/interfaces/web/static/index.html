@@ -34,6 +34,24 @@
       </div>
     </header>
 
+    <!-- Banner de Alerta de Cota Esgotada -->
+    <div id="quota-warning-banner" class="quota-warning-banner" style="display: none;">
+      <div class="quota-banner-icon">⚠️</div>
+      <div class="quota-banner-content">
+        <div class="quota-banner-title">Cota OpenAPI APsystems Esgotada na Nuvem (Código 2005)</div>
+        <div class="quota-banner-desc" id="quota-banner-desc">
+          O limite contratual de 1.000 requisições mensais foi atingido na plataforma da APsystems.
+          As coletas automáticas foram suspensas preventivamente para proteger sua conta e evitar bloqueios.
+          A cota será renovada automaticamente no primeiro dia do próximo mês.
+        </div>
+        <div class="quota-banner-action">
+          <button id="btn-backfill" class="btn btn-sm btn-secondary" title="Recuperar dias anteriores com apenas 1 requisição">
+            <span class="btn-icon">🔄</span> Recuperar Histórico do Mês (1 req)
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Hero Cards Grid -->
     <div class="grid-cards">
       <!-- Geração de Hoje -->
@@ -75,8 +93,13 @@
     <!-- Gráfico Histórico Diário -->
     <div class="section-panel">
       <div class="section-header">
-        <h2 class="section-title">Histórico Diário de Geração</h2>
-        <span style="font-size:13px; color: var(--text-muted);">Últimos 30 dias (Dados em SQLite local)</span>
+        <div>
+          <h2 class="section-title">Histórico Diário de Geração</h2>
+          <span style="font-size:13px; color: var(--text-muted);">Últimos 30 dias (Dados em SQLite local)</span>
+        </div>
+        <button id="btn-chart-backfill" class="btn btn-secondary btn-sm" title="Importar histórico consolidado do mês com 1 única chamada à API">
+          <span class="btn-icon">🔄</span> Sincronizar Mês (1 req)
+        </button>
       </div>
       <div class="chart-container">
         <canvas id="historyChart"></canvas>

@@ -20,6 +20,8 @@ class BudgetStatus:
     is_solar_window: bool
     can_request_now: bool
     reason: str
+    quota_exhausted: bool = False
+    quota_exhausted_message: str = ""
 
 
 class BudgetKeeperService:
@@ -48,6 +50,20 @@ class BudgetKeeperService:
         calls_today = self.repository.count_api_calls_today()
         remaining_month = max(0, self.monthly_limit - calls_month)
 
+        # Checagem de bloqueio por erro da nuvem APsystems (Código 2005 / Cota Esgotada)
+        quota_flag = self.repository.get_setting("quota_exhausted", "false") == "true"
+        quota_month = self.repository.get_setting("quota_exhausted_month", "")
+        current_month_str = now.strftime("%Y-%m")
+        exhausted_msg = self.repository.get_setting("quota_exhausted_message", "")
+
+        is_exhausted = False
+        if quota_flag:
+            if quota_month == current_month_str:
+                is_exhausted = True
+            else:
+                # O mês virou: a cota na APsystems renova no primeiro dia de cada mês
+                self.clear_quota_exhausted()
+
         # Dias restantes no mês (incluindo hoje)
         _, days_in_month = calendar.monthrange(now.year, now.month)
         days_remaining = max(1, days_in_month - now.day + 1)
@@ -58,9 +74,15 @@ class BudgetKeeperService:
         in_solar_window = self.window_start_time <= current_time <= self.window_end_time
 
         # Avaliação de permissão
-        if remaining_month <= 0:
+        if is_exhausted:
             can_request = False
-            reason = "Cota mensal de 1.000 requisições totalmente esgotada!"
+            reason = (
+                "Cota mensal OpenAPI da APsystems esgotada na nuvem (Código 2005). "
+                f"As requisições estão suspensas até o primeiro dia do próximo mês. {exhausted_msg}".strip()
+            )
+        elif remaining_month <= 0:
+            can_request = False
+            reason = "Cota mensal de 1.000 requisições totalmente esgotada no livro-razão local!"
         elif calls_today >= daily_target:
             can_request = False
             reason = f"Teto diário calculado ({daily_target} reqs) atingido para hoje."
@@ -80,7 +102,25 @@ class BudgetKeeperService:
             is_solar_window=in_solar_window,
             can_request_now=can_request,
             reason=reason,
+            quota_exhausted=is_exhausted,
+            quota_exhausted_message=exhausted_msg,
         )
+
+    def mark_quota_exhausted(self, reason: str = "Limite de requisições excedido na APsystems (Código 2005)") -> None:
+        """Marca no banco local que a APsystems retornou código 2005 (cota esgotada na nuvem)."""
+        now = datetime.now()
+        current_month_str = now.strftime("%Y-%m")
+        self.repository.set_setting("quota_exhausted", "true")
+        self.repository.set_setting("quota_exhausted_month", current_month_str)
+        self.repository.set_setting("quota_exhausted_message", reason)
+        logger.critical(f"BudgetKeeper: Cota OpenAPI da APsystems marcada como ESGOTADA ({current_month_str}): {reason}")
+
+    def clear_quota_exhausted(self) -> None:
+        """Limpa o bloqueio de cota esgotada (ex: na virada do mês ou restauração contratual)."""
+        self.repository.set_setting("quota_exhausted", "false")
+        self.repository.set_setting("quota_exhausted_month", "")
+        self.repository.set_setting("quota_exhausted_message", "")
+        logger.info("BudgetKeeper: Bloqueio de cota esgotada limpo com sucesso.")
 
     def verify_can_request(self, force: bool = False) -> None:
         """
