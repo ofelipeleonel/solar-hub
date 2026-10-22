@@ -76,6 +76,9 @@ class BudgetKeeperService:
         # Avaliação de permissão
         if is_exhausted:
             can_request = False
+            remaining_month = 0
+            calls_month = max(calls_month, self.monthly_limit)
+            daily_target = 0
             reason = (
                 "Cota mensal OpenAPI da APsystems esgotada na nuvem (Código 2005). "
                 f"As requisições estão suspensas até o primeiro dia do próximo mês. {exhausted_msg}".strip()

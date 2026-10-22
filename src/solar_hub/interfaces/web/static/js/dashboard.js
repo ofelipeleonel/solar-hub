@@ -24,7 +24,24 @@ async function loadDashboard() {
     const statusRes = await fetch("/api/status");
     const status = await statusRes.json();
 
-    document.getElementById("val-today-kwh").innerText = `${status.today_kwh.toFixed(2)} kWh`;
+    // Geração de Hoje (evita mostrar o último dia histórico quando não há coleta para hoje)
+    const todayEl = document.getElementById("val-today-kwh");
+    const subTodayEl = document.getElementById("sub-today");
+
+    if (status.has_today_data) {
+      todayEl.innerText = `${status.today_kwh.toFixed(2)} kWh`;
+      if (subTodayEl) subTodayEl.innerText = "Produção solar acumulada no dia";
+    } else {
+      todayEl.innerText = "-- kWh";
+      if (subTodayEl) {
+        if (status.last_recorded_date) {
+          subTodayEl.innerText = `Sem coleta hoje. Último: ${status.last_recorded_date} (${status.last_recorded_kwh.toFixed(2)} kWh)`;
+        } else {
+          subTodayEl.innerText = "Aguardando primeira coleta de hoje";
+        }
+      }
+    }
+
     document.getElementById("val-inverters").innerText = `${status.total_inverters} unidades`;
     document.getElementById("val-capacity").innerText = `${status.capacity_kwp.toFixed(2)} kWp`;
 
@@ -33,9 +50,9 @@ async function loadDashboard() {
     const budgetValEl = document.getElementById("val-budget-remaining");
     const subBudgetEl = document.getElementById("sub-budget");
 
-    if (status.budget && status.budget.quota_exhausted) {
+    if (status.budget && (status.budget.quota_exhausted || status.budget.remaining_month === 0)) {
       if (bannerEl) bannerEl.style.display = "flex";
-      budgetValEl.innerText = "0 / 1000 (Esgotada)";
+      budgetValEl.innerText = "0 / 1000";
       budgetValEl.style.color = "var(--accent-red)";
       subBudgetEl.innerText = "Cota OpenAPI Esgotada na Nuvem (Código 2005) 🔒";
     } else {

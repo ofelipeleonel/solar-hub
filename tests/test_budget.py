@@ -80,4 +80,6 @@ def test_budget_keeper_cloud_quota_exhausted_flag():
 
     assert status.quota_exhausted is True
     assert status.can_request_now is False
+    assert status.remaining_month == 0
+    assert status.calls_this_month == 1000
     assert "Código 2005" in status.reason

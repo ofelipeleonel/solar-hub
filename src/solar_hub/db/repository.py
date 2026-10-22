@@ -205,6 +205,16 @@ class SolarRepository:
         )
         return list(self.session.execute(stmt).scalars().all())
 
+    def get_daily_aggregate_by_date(
+        self, system_sid: str, target_date: str
+    ) -> Optional[DailyAggregateRecord]:
+        """Retorna o agregado diário de uma data específica ou None se não existir."""
+        stmt = select(DailyAggregateRecord).where(
+            DailyAggregateRecord.system_sid == system_sid,
+            DailyAggregateRecord.date == target_date,
+        )
+        return self.session.execute(stmt).scalar_one_or_none()
+
     def get_daily_aggregates_range(
         self,
         system_sid: str,

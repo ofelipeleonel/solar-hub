@@ -15,6 +15,9 @@ def test_api_status(client):
     data = response.json()
     assert "sid" in data
     assert "capacity_kwp" in data
+    assert "today_kwh" in data
+    assert "has_today_data" in data
+    assert "today_date" in data
     assert "budget" in data
     assert "remaining_month" in data["budget"]
 

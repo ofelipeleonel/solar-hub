@@ -206,14 +206,24 @@ def get_repo_and_settings():
 @app.get("/api/status")
 def get_status() -> Dict[str, Any]:
     """Retorna o status geral da usina, telemetria de hoje e governança de cota."""
+    from datetime import date
+
     settings, session, repo, budget = get_repo_and_settings()
     try:
         system = repo.get_system(settings.apsystems_system_id)
         budget_status = budget.get_status()
 
-        # Pega o agregado de hoje no banco local
-        today_agg = repo.get_daily_aggregates(settings.apsystems_system_id, limit=1)
-        today_kwh = today_agg[0].energy_kwh if today_agg else 0.0
+        # Busca especificamente o agregado da data de HOJE
+        today_str = date.today().isoformat()
+        today_record = repo.get_daily_aggregate_by_date(settings.apsystems_system_id, today_str)
+        today_kwh = today_record.energy_kwh if today_record else 0.0
+        has_today_data = today_record is not None
+
+        # Busca o último registro diário existente no banco para referência
+        latest_agg = repo.get_daily_aggregates(settings.apsystems_system_id, limit=1)
+        last_recorded_date = latest_agg[0].date if latest_agg else None
+        last_recorded_kwh = latest_agg[0].energy_kwh if latest_agg else 0.0
+
         # Total de inversores e canais no banco local
         total_inverters = len(repo.get_inverters())
 
@@ -223,6 +233,10 @@ def get_status() -> Dict[str, Any]:
             "capacity_kwp": system.capacity_kwp if system else 0.0,
             "status_light": system.status_light if system else 1,
             "today_kwh": today_kwh,
+            "has_today_data": has_today_data,
+            "today_date": today_str,
+            "last_recorded_date": last_recorded_date,
+            "last_recorded_kwh": last_recorded_kwh,
             "total_inverters": total_inverters,
             "budget": {
                 "calls_this_month": budget_status.calls_this_month,

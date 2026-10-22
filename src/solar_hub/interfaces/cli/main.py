@@ -7,6 +7,7 @@ from rich.table import Table
 
 from solar_hub.client.client import APsystemsClient
 from solar_hub.core.config import Settings
+from solar_hub.core.exceptions import QuotaExceededError
 from solar_hub.db.database import get_session_factory, init_db
 from solar_hub.db.repository import SolarRepository
 from solar_hub.services.budget import BudgetKeeperService
@@ -127,13 +128,29 @@ def status():
         system_title = system.name if system and system.name else f"Usina {settings.apsystems_system_id}"
         budget_status = budget.get_status()
 
-        # Resumo consolidado da API
-        summary = client.get_system_summary(settings.apsystems_system_id)
-        repo.record_api_call(
-            endpoint=f"/user/api/v2/systems/summary/{settings.apsystems_system_id}",
-            method="GET",
-            notes="Status Check",
-        )
+        # Resumo consolidado da API com fallback resiliente para banco local
+        from datetime import date
+        today_str = date.today().isoformat()
+        try:
+            summary = client.get_system_summary(settings.apsystems_system_id)
+            repo.record_api_call(
+                endpoint=f"/user/api/v2/systems/summary/{settings.apsystems_system_id}",
+                method="GET",
+                notes="Status Check",
+            )
+            today_display = f"{summary.today_kwh:.2f} kWh"
+            month_display = f"{summary.month_kwh:.2f} kWh"
+            year_display = f"{summary.year_kwh:.2f} kWh"
+            lifetime_display = f"{summary.lifetime_kwh:,.2f} kWh"
+        except QuotaExceededError:
+            budget.mark_quota_exhausted("Status check detectou cota esgotada (2005)")
+            budget_status = budget.get_status()
+            today_rec = repo.get_daily_aggregate_by_date(settings.apsystems_system_id, today_str)
+            latest_rec = repo.get_daily_aggregates(settings.apsystems_system_id, limit=1)
+            today_display = f"{today_rec.energy_kwh:.2f} kWh" if today_rec else f"-- (Último salvo: {latest_rec[0].date if latest_rec else 'Nenhum'})"
+            month_display = "Indisponível (Cota esgotada)"
+            year_display = "Indisponível (Cota esgotada)"
+            lifetime_display = "Indisponível (Cota esgotada)"
 
         grid = Table.grid(expand=True)
         grid.add_column()
@@ -141,23 +158,28 @@ def status():
 
         # Cartão de Energia
         energy_panel = Panel(
-            f"[bold cyan]Hoje:[/bold cyan] {summary.today_kwh:.2f} kWh\n"
-            f"[bold cyan]Mês:[/bold cyan] {summary.month_kwh:.2f} kWh\n"
-            f"[bold cyan]Ano:[/bold cyan] {summary.year_kwh:.2f} kWh\n"
-            f"[bold green]Lifetime:[/bold green] {summary.lifetime_kwh:,.2f} kWh",
+            f"[bold cyan]Hoje ({today_str}):[/bold cyan] {today_display}\n"
+            f"[bold cyan]Mês:[/bold cyan] {month_display}\n"
+            f"[bold cyan]Ano:[/bold cyan] {year_display}\n"
+            f"[bold green]Lifetime:[/bold green] {lifetime_display}",
             title="Telemetria de Geração",
             border_style="green",
         )
 
         # Cartão do Budget Keeper
+        remaining_str = (
+            "[bold red]0 (Esgotada na APsystems - Código 2005)[/bold red]"
+            if budget_status.quota_exhausted or budget_status.remaining_month == 0
+            else f"[green]{budget_status.remaining_month}[/green]"
+        )
         budget_panel = Panel(
             f"[bold]Consumo no Mês:[/bold] {budget_status.calls_this_month} / {budget_status.monthly_limit} reqs\n"
-            f"[bold]Restante no Mês:[/bold] [green]{budget_status.remaining_month}[/green] reqs\n"
+            f"[bold]Restante no Mês:[/bold] {remaining_str}\n"
             f"[bold]Chamadas Hoje:[/bold] {budget_status.calls_today} reqs (Meta diária segura: ~{budget_status.daily_budget_target})\n"
             f"[bold]Janela Solar:[/bold] {'Ativa (Dia)' if budget_status.is_solar_window else 'Inativa (Noite)'}\n"
             f"[bold]Diagnóstico:[/bold] {budget_status.reason}",
             title="Budget Keeper (Cota OpenAPI)",
-            border_style="blue",
+            border_style="red" if budget_status.quota_exhausted else "blue",
         )
 
         grid.add_row(energy_panel, budget_panel)
@@ -211,15 +233,20 @@ def budget():
     settings, session, repo, client, budget, discovery, collector = get_services()
     try:
         st = budget.get_status()
+        remaining_str = (
+            "[bold red]0 (Esgotada na APsystems - Código 2005)[/bold red]"
+            if st.quota_exhausted or st.remaining_month == 0
+            else f"[green]{st.remaining_month}[/green]"
+        )
         console.print(Panel(
             f"[bold]Chamadas no Mês:[/bold] {st.calls_this_month} / {st.monthly_limit}\n"
-            f"[bold]Saldo Restante no Mês:[/bold] {st.remaining_month}\n"
+            f"[bold]Saldo Restante no Mês:[/bold] {remaining_str}\n"
             f"[bold]Chamadas Realizadas Hoje:[/bold] {st.calls_today}\n"
             f"[bold]Orçamento Diário Recomendado:[/bold] {st.daily_budget_target} reqs/dia\n"
             f"[bold]Janela Solar Ativa:[/bold] {'Sim' if st.is_solar_window else 'Não'}\n"
             f"[bold]Status Operacional:[/bold] {st.reason}",
             title="Relatório do Guardião de Cota (Budget Keeper)",
-            border_style="yellow"
+            border_style="red" if st.quota_exhausted else "yellow"
         ))
     finally:
         session.close()
